@@ -1,0 +1,23 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.DS_Store
+
+# Local data / env
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+**/data/
+.env
+.env.local
+
+# TS build info
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
