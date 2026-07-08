@@ -1,0 +1,256 @@
+:root {
+  --bg: #0f172a;
+  --panel: #1e293b;
+  --panel-soft: #273449;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #6366f1;
+  --expired: #ef4444;
+  --expiring: #f59e0b;
+  --ok: #22c55e;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: radial-gradient(1200px 600px at 20% -10%, #1e293b, var(--bg));
+  color: var(--text);
+  min-height: 100vh;
+}
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 48px 20px 80px;
+}
+
+.header h1 {
+  font-size: 2.4rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.header p {
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin: 32px 0;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 14px;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card__value {
+  font-size: 2rem;
+  font-weight: 700;
+}
+
+.card__label {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.card--expired .card__value {
+  color: var(--expired);
+}
+.card--expiring .card__value {
+  color: var(--expiring);
+}
+.card--ok .card__value {
+  color: var(--ok);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.panel h2 {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+}
+
+.form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: end;
+}
+
+.form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.form__wide {
+  grid-column: 1 / -1;
+}
+
+.form input {
+  background: var(--panel-soft);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.form input:focus {
+  outline: 2px solid var(--accent);
+  border-color: transparent;
+}
+
+.form button {
+  grid-column: 1 / -1;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 12px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.form button:hover {
+  filter: brightness(1.1);
+}
+
+.error {
+  color: var(--expired);
+  margin: 14px 0 0;
+  font-size: 0.9rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: var(--panel-soft);
+  border-radius: 12px;
+  padding: 14px 16px;
+  border-left: 4px solid transparent;
+}
+
+.row--expired {
+  border-left-color: var(--expired);
+}
+.row--expiring {
+  border-left-color: var(--expiring);
+}
+.row--ok {
+  border-left-color: var(--ok);
+}
+
+.row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.row__name {
+  font-weight: 600;
+}
+
+.row__meta,
+.row__notes {
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.row__side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+}
+
+.badge--expired {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--expired);
+}
+.badge--expiring {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--expiring);
+}
+.badge--ok {
+  background: rgba(34, 197, 94, 0.18);
+  color: var(--ok);
+}
+
+.row__days {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.row__delete {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
+.row__delete:hover {
+  color: var(--expired);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+@media (max-width: 640px) {
+  .cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .form {
+    grid-template-columns: 1fr;
+  }
+}
