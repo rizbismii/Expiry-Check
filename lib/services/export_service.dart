@@ -68,9 +68,12 @@ class ExportService {
   static final _dateFmt = DateFormat('dd/MM/yyyy');
   static final _stampFmt = DateFormat('yyyyMMdd_HHmmss');
 
+  /// When [storeNames] is provided (the "All stores" report), a Store column
+  /// is added so rows from different branches stay distinguishable.
   Future<File> buildExcelReport(List<Product> products,
       {required String storeName,
-      ReportOptions options = const ReportOptions()}) async {
+      ReportOptions options = const ReportOptions(),
+      Map<int, String>? storeNames}) async {
     final excel = Excel.createExcel();
     // Excel sheet names are limited to 31 chars and a restricted charset.
     final cleaned =
@@ -87,7 +90,8 @@ class ExportService {
       backgroundColorHex: ExcelColor.fromHexString('#1B5E20'),
       fontColorHex: ExcelColor.white,
     );
-    const headers = [
+    final headers = [
+      if (storeNames != null) 'Store',
       'Brand Name',
       'Product Name',
       'Expiry Date',
@@ -110,6 +114,8 @@ class ExportService {
     for (var r = 0; r < sorted.length; r++) {
       final p = sorted[r];
       final row = <CellValue>[
+        if (storeNames != null)
+          TextCellValue(storeNames[p.storeId] ?? 'Store ${p.storeId}'),
         TextCellValue(p.brand),
         TextCellValue(p.name),
         TextCellValue(_dateFmt.format(p.expiryDate)),
@@ -167,9 +173,10 @@ class ExportService {
 
   Future<void> shareExcelReport(List<Product> products,
       {required String storeName,
-      ReportOptions options = const ReportOptions()}) async {
+      ReportOptions options = const ReportOptions(),
+      Map<int, String>? storeNames}) async {
     final file = await buildExcelReport(products,
-        storeName: storeName, options: options);
+        storeName: storeName, options: options, storeNames: storeNames);
     await SharePlus.instance.share(ShareParams(
       files: [XFile(file.path)],
       subject: 'Expiry Check report — $storeName (${options.basisLabel})',

@@ -5,6 +5,7 @@ import 'package:timezone/data/latest_all.dart' as tz_data;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../models/product.dart';
+import '../models/store.dart';
 import 'database_service.dart';
 
 /// Schedules on-device notifications (no push server needed):
@@ -95,16 +96,18 @@ class NotificationService {
 
   // ---- Scheduling ----
 
-  static const _digestDetails = NotificationDetails(
-    android: AndroidNotificationDetails(
-      'weekly_digest',
-      'Weekly expiry digest',
-      channelDescription: 'Weekly summary of products nearing expiry',
-      importance: Importance.high,
-      priority: Priority.high,
-    ),
-    iOS: DarwinNotificationDetails(),
-  );
+  static NotificationDetails _digestDetails(String body) => NotificationDetails(
+        android: AndroidNotificationDetails(
+          'weekly_digest',
+          'Weekly expiry dashboard',
+          channelDescription: 'Weekly stock dashboard with expiry summary',
+          importance: Importance.high,
+          priority: Priority.high,
+          // Expands the notification so the whole dashboard is readable.
+          styleInformation: BigTextStyleInformation(body),
+        ),
+        iOS: const DarwinNotificationDetails(),
+      );
 
   static const _productDetails = NotificationDetails(
     android: AndroidNotificationDetails(
@@ -127,7 +130,7 @@ class NotificationService {
     final storeNames = {for (final s in stores) s.id: s.name};
     final leadDays = await getLeadDays();
 
-    await _scheduleWeeklyDigest(products, leadDays);
+    await _scheduleWeeklyDigest(products, stores);
     for (final product in products) {
       await _scheduleProductReminders(
           product, leadDays, storeNames[product.storeId]);
@@ -135,7 +138,7 @@ class NotificationService {
   }
 
   Future<void> _scheduleWeeklyDigest(
-      List<Product> products, int leadDays) async {
+      List<Product> products, List<Store> stores) async {
     final weekday = await getWeeklyWeekday();
     final hour = await getWeeklyHour();
 
@@ -145,19 +148,51 @@ class NotificationService {
       next = next.add(const Duration(days: 1));
     }
 
-    final expiring = products.where((p) => p.daysLeft <= leadDays).length;
-    final body = expiring > 0
-        ? '$expiring product(s) expired or expiring within $leadDays days. Open to review.'
-        : 'Weekly check-in: review your inventory for items nearing expiry.';
-
+    final body = buildDashboardBody(products, stores);
     await _zonedSchedule(
       id: _weeklyDigestId,
-      title: 'Weekly expiry check',
+      title: 'Weekly stock dashboard',
       body: body,
       when: next,
-      details: _digestDetails,
+      details: _digestDetails(body),
       matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
     );
+  }
+
+  /// Quantity-based dashboard shown in the weekly notification: total units
+  /// and units per expiry band, overall and per store branch.
+  static String buildDashboardBody(List<Product> products, List<Store> stores) {
+    if (products.isEmpty) {
+      return 'No products tracked yet. Scan your stock to start receiving '
+          'expiry summaries.';
+    }
+    int units(Iterable<Product> ps) => ps.fold(0, (sum, p) => sum + p.quantity);
+
+    String bandLine(List<Product> ps) {
+      final expired = units(ps.where((p) => p.isExpired));
+      final soon30 = units(ps.where((p) => p.isExpiringSoon));
+      final soon90 = units(ps.where((p) => p.isExpiring90));
+      final fresh = units(ps) - expired - soon30 - soon90;
+      return 'Expired $expired • ≤30d $soon30 • ≤90d $soon90 • Fresh $fresh';
+    }
+
+    final lines = <String>[
+      'Total stock: ${units(products)} units (${products.length} products)',
+      bandLine(products),
+    ];
+    // Per-branch breakdown when more than one branch holds stock.
+    final byStore = <int, List<Product>>{};
+    for (final p in products) {
+      byStore.putIfAbsent(p.storeId, () => []).add(p);
+    }
+    if (byStore.length > 1) {
+      for (final store in stores) {
+        final ps = byStore[store.id];
+        if (ps == null || ps.isEmpty) continue;
+        lines.add('${store.name}: ${units(ps)} units — ${bandLine(ps)}');
+      }
+    }
+    return lines.join('\n');
   }
 
   Future<void> _scheduleProductReminders(

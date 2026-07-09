@@ -123,29 +123,33 @@ class DatabaseService {
     return rows.map(Product.fromMap).toList();
   }
 
+  /// Normalization used for duplicate detection: case-insensitive, ignores
+  /// leading/trailing/repeated whitespace (OCR and typing often differ there).
+  static String normalizeForMatch(String value) =>
+      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
   /// Finds an existing product in the same store with the same brand, name,
-  /// batch and expiry date (case-insensitive), used to merge duplicates by
-  /// increasing quantity instead of adding a second row.
+  /// batch and expiry date, used to merge duplicates by increasing quantity
+  /// instead of adding a second row. Comparison is done in Dart so casing,
+  /// extra spaces and stored date-time noise never break the match.
   Future<Product?> findMatching(Product p) async {
-    final db = await database;
-    final rows = await db.query(
-      _table,
-      where: 'storeId = ? AND LOWER(TRIM(name)) = ? AND '
-          'LOWER(TRIM(brand)) = ? AND LOWER(TRIM(batch)) = ? AND '
-          'expiryDate = ?',
-      whereArgs: [
-        p.storeId,
-        p.name.trim().toLowerCase(),
-        p.brand.trim().toLowerCase(),
-        p.batch.trim().toLowerCase(),
-        p.expiryDate.toIso8601String(),
-      ],
-      limit: 1,
-    );
-    if (rows.isEmpty) return null;
-    final found = Product.fromMap(rows.first);
-    // Never merge into itself when editing.
-    return found.id == p.id ? null : found;
+    final candidates = await getAll(storeId: p.storeId);
+    final name = normalizeForMatch(p.name);
+    final brand = normalizeForMatch(p.brand);
+    final batch = normalizeForMatch(p.batch);
+    for (final e in candidates) {
+      if (e.id != null && e.id == p.id) continue; // never merge into itself
+      if (normalizeForMatch(e.name) == name &&
+          normalizeForMatch(e.brand) == brand &&
+          normalizeForMatch(e.batch) == batch &&
+          _sameDay(e.expiryDate, p.expiryDate)) {
+        return e;
+      }
+    }
+    return null;
   }
 
   Future<List<Product>> getExpiringWithin(int days) async {

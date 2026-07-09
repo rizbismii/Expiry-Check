@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 
 import '../models/product.dart';
 import '../models/store.dart';
@@ -9,6 +10,7 @@ import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import '../services/ocr_service.dart';
 import '../utils/date_parser.dart';
+import '../utils/nz_date_input_formatter.dart';
 
 class ProductFormScreen extends StatefulWidget {
   final Product? product;
@@ -46,6 +48,10 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   bool _rescanning = false;
   String? _scannedText;
 
+  final SpeechToText _speech = SpeechToText();
+  bool _speechReady = false;
+  String? _listeningField;
+
   bool get _isEdit => widget.product != null;
 
   @override
@@ -74,6 +80,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   @override
   void dispose() {
+    _speech.stop();
     _nameCtrl.dispose();
     _brandCtrl.dispose();
     _batchCtrl.dispose();
@@ -88,6 +95,70 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   void _bumpQuantity(int delta) {
     final next = (_quantityValue + delta).clamp(1, 999999);
     setState(() => _qtyCtrl.text = '$next');
+  }
+
+  // ---- Voice input ----
+
+  /// Starts (or stops) dictation into [controller]. For the expiry field a
+  /// spoken date like "12 May 2028" is converted to dd/mm/yyyy.
+  Future<void> _dictate(String fieldKey, TextEditingController controller,
+      {bool isDate = false, bool isNumber = false}) async {
+    if (_speech.isListening) {
+      await _speech.stop();
+      setState(() => _listeningField = null);
+      return;
+    }
+    if (!_speechReady) {
+      _speechReady = await _speech.initialize(
+        onStatus: (status) {
+          if (status == 'done' || status == 'notListening') {
+            if (mounted) setState(() => _listeningField = null);
+          }
+        },
+        onError: (_) {
+          if (mounted) setState(() => _listeningField = null);
+        },
+      );
+      if (!_speechReady) {
+        _snack('Speech recognition is not available on this device. '
+            'Check the microphone permission.');
+        return;
+      }
+    }
+    setState(() => _listeningField = fieldKey);
+    await _speech.listen(onResult: (result) {
+      if (!mounted) return;
+      final words = result.recognizedWords;
+      if (words.isEmpty) return;
+      setState(() {
+        if (isDate) {
+          final parsed = DateParser.parseTypedDate(words) ??
+              DateParser.parse(words).expiryDate;
+          controller.text = parsed != null
+              ? _nzDateFmt.format(parsed)
+              : controller.text;
+        } else if (isNumber) {
+          final digits = words.replaceAll(RegExp(r'[^0-9]'), '');
+          if (digits.isNotEmpty) controller.text = digits;
+        } else {
+          controller.text = words;
+        }
+      });
+    });
+  }
+
+  Widget _micButton(String fieldKey, TextEditingController controller,
+      {bool isDate = false, bool isNumber = false}) {
+    final listening = _listeningField == fieldKey;
+    return IconButton(
+      tooltip: listening ? 'Stop dictation' : 'Speak',
+      icon: Icon(
+        listening ? Icons.mic : Icons.mic_none,
+        color: listening ? Theme.of(context).colorScheme.error : null,
+      ),
+      onPressed: () =>
+          _dictate(fieldKey, controller, isDate: isDate, isNumber: isNumber),
+    );
   }
 
   Future<void> _rescan() async {
@@ -171,15 +242,45 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       if (_isEdit) {
         await DatabaseService.instance.update(product);
       } else {
-        // Same brand + product + batch + expiry in this store: top up the
-        // existing entry's quantity instead of creating a duplicate row.
+        // Same brand + product + batch + expiry in this store: offer to top
+        // up the existing entry's quantity instead of adding a duplicate row.
         final existing = await DatabaseService.instance.findMatching(product);
         if (existing != null) {
-          final merged = existing.copyWith(
-              quantity: existing.quantity + product.quantity);
-          await DatabaseService.instance.update(merged);
-          mergeMessage =
-              'Already in the list — quantity increased to ${merged.quantity}.';
+          if (!mounted) return;
+          final increase = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Already in the list'),
+              content: Text(
+                  '"${existing.brand.isNotEmpty ? '${existing.brand} — ' : ''}'
+                  '${existing.name}" with the same batch and expiry date '
+                  'already has quantity ${existing.quantity}.\n\n'
+                  'Increase it to ${existing.quantity + product.quantity} '
+                  'instead of adding a new line?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Add as new line')),
+                FilledButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('Increase quantity')),
+              ],
+            ),
+          );
+          if (increase == null) {
+            // Dialog dismissed: stay on the form without saving.
+            setState(() => _saving = false);
+            return;
+          }
+          if (increase) {
+            final merged = existing.copyWith(
+                quantity: existing.quantity + product.quantity);
+            await DatabaseService.instance.update(merged);
+            mergeMessage =
+                'Quantity of "${existing.name}" increased to ${merged.quantity}.';
+          } else {
+            await DatabaseService.instance.insert(product);
+          }
         } else {
           await DatabaseService.instance.insert(product);
         }
@@ -187,8 +288,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       await NotificationService.instance.rescheduleAll();
       if (mounted) {
         if (mergeMessage != null) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(mergeMessage)));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(mergeMessage)));
         }
         Navigator.of(context).pop(true);
       }
@@ -271,18 +372,20 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             ],
             TextFormField(
               controller: _brandCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Brand name',
-                prefixIcon: Icon(Icons.sell_outlined),
+                prefixIcon: const Icon(Icons.sell_outlined),
+                suffixIcon: _micButton('brand', _brandCtrl),
               ),
               textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 12),
             TextFormField(
               controller: _nameCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Product name *',
-                prefixIcon: Icon(Icons.shopping_bag_outlined),
+                prefixIcon: const Icon(Icons.shopping_bag_outlined),
+                suffixIcon: _micButton('name', _nameCtrl),
               ),
               textCapitalization: TextCapitalization.words,
               validator: (v) =>
@@ -293,15 +396,25 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               controller: _expiryCtrl,
               decoration: InputDecoration(
                 labelText: 'Expiry date *',
-                hintText: 'dd/mm/yyyy',
+                hintText: 'dd/mm/yyyy — type digits, slashes are added',
                 prefixIcon: const Icon(Icons.event),
-                suffixIcon: IconButton(
-                  tooltip: 'Pick from calendar',
-                  icon: const Icon(Icons.calendar_month),
-                  onPressed: _pickDate,
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _micButton('expiry', _expiryCtrl, isDate: true),
+                    IconButton(
+                      tooltip: 'Pick from calendar',
+                      icon: const Icon(Icons.calendar_month),
+                      onPressed: _pickDate,
+                    ),
+                  ],
                 ),
               ),
-              keyboardType: TextInputType.datetime,
+              // Numeric keyboard + auto-inserted slashes: some Android
+              // keyboards hide '/' on the datetime layout, which made the
+              // field impossible to type into.
+              keyboardType: TextInputType.number,
+              inputFormatters: [NzDateInputFormatter()],
               validator: (v) {
                 if (v == null || v.trim().isEmpty) {
                   return 'Expiry date is required';
@@ -315,9 +428,10 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _batchCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Batch / lot number',
-                prefixIcon: Icon(Icons.qr_code_2),
+                prefixIcon: const Icon(Icons.qr_code_2),
+                suffixIcon: _micButton('batch', _batchCtrl),
               ),
               textCapitalization: TextCapitalization.characters,
             ),
@@ -339,9 +453,10 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 Expanded(
                   child: TextFormField(
                     controller: _qtyCtrl,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Quantity *',
-                      prefixIcon: Icon(Icons.numbers),
+                      prefixIcon: const Icon(Icons.numbers),
+                      suffixIcon: _micButton('qty', _qtyCtrl, isNumber: true),
                     ),
                     keyboardType: TextInputType.number,
                     inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -372,9 +487,10 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _notesCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Notes',
-                prefixIcon: Icon(Icons.notes),
+                prefixIcon: const Icon(Icons.notes),
+                suffixIcon: _micButton('notes', _notesCtrl),
               ),
               maxLines: 3,
             ),

@@ -45,6 +45,10 @@
 	<string>Expiry Check uses the camera to photograph product labels so it can recognize the expiry date, brand and batch number automatically.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Expiry Check can read a label photo from your library to recognize product details.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Expiry Check uses the microphone so you can dictate product details instead of typing.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Expiry Check converts your speech to text to fill in product fields.</string>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 
 import '../services/export_service.dart';
 import '../utils/date_parser.dart';
+import '../utils/nz_date_input_formatter.dart';
 
 /// Lets the user choose what an Excel report is based on (expiry date or
 /// added date) and an optional dd/mm/yyyy date range, typeable or picked
@@ -82,7 +83,8 @@ class _ReportOptionsDialogState extends State<_ReportOptionsDialog> {
           onPressed: () => _pickInto(controller),
         ),
       ),
-      keyboardType: TextInputType.datetime,
+      keyboardType: TextInputType.number,
+      inputFormatters: [NzDateInputFormatter()],
       validator: _validateOptionalDate,
     );
   }

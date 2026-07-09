@@ -114,6 +114,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
             storeName: store.name, options: options);
       });
 
+  Future<void> _exportAllStores() => _run(() async {
+        final products = await DatabaseService.instance.getAll();
+        if (products.isEmpty) {
+          _snack('No products to export yet.');
+          return;
+        }
+        if (!mounted) return;
+        final options = await showReportOptionsDialog(context);
+        if (options == null) return;
+        final filtered = options.apply(products);
+        if (filtered.isEmpty) {
+          _snack('No products match the selected dates.');
+          return;
+        }
+        await ExportService.instance.shareExcelReport(
+          filtered,
+          storeName: 'All Stores',
+          options: options,
+          storeNames: {for (final s in _stores) s.id: s.name},
+        );
+      });
+
   Future<void> _backup() => _run(() async {
         final products = await DatabaseService.instance.getAll();
         if (products.isEmpty) {
@@ -266,21 +288,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                _sectionTitle('Excel reports (per store)'),
+                _sectionTitle('Excel reports'),
                 Card(
                   margin: EdgeInsets.zero,
                   child: Column(
                     children: [
-                      for (var i = 0; i < _stores.length; i++) ...[
-                        if (i > 0) const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.storefront),
+                        title: const Text('Export All Stores (combined)'),
+                        subtitle: const Text(
+                            'Every branch in one report with a Store column'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: _busy ? null : _exportAllStores,
+                      ),
+                      for (final store in _stores) ...[
+                        const Divider(height: 1),
                         ListTile(
                           leading: const Icon(Icons.table_view),
-                          title: Text('Export ${_stores[i].name}'),
+                          title: Text('Export ${store.name}'),
                           subtitle: const Text(
                               'Inventory with brand, batch, expiry and status'),
                           trailing: const Icon(Icons.chevron_right),
-                          onTap:
-                              _busy ? null : () => _exportExcel(_stores[i]),
+                          onTap: _busy ? null : () => _exportExcel(store),
                         ),
                       ],
                     ],
