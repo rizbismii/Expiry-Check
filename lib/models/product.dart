@@ -94,12 +94,12 @@ class Product {
 
   static const categories = [
     'General',
-    'Food & Beverage',
-    'Dairy',
-    'Medicine',
-    'Cosmetics',
-    'Cleaning',
-    'Baby Care',
+    'Shisha Flavours',
+    'Salt Liquids',
+    'Free Base Liquids',
+    'Detox Products',
+    'Prefilled Vape Pods',
+    'Prefilled Kits',
     'Other',
   ];
 }

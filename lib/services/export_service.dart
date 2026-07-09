@@ -15,7 +15,8 @@ class ExportService {
   ExportService._();
   static final ExportService instance = ExportService._();
 
-  static final _dateFmt = DateFormat('yyyy-MM-dd');
+  // NZ date format for report columns.
+  static final _dateFmt = DateFormat('dd/MM/yyyy');
   static final _stampFmt = DateFormat('yyyyMMdd_HHmmss');
 
   Future<File> buildExcelReport(List<Product> products) async {

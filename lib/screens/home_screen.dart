@@ -282,7 +282,7 @@ class _HomeScreenState extends State<HomeScreen> {
         : product.isExpiringSoon
             ? Colors.orange
             : Colors.green;
-    final dateFmt = DateFormat('d MMM yyyy');
+    final dateFmt = DateFormat('dd/MM/yyyy');
     final subtitleParts = <String>[
       if (product.brand.isNotEmpty) product.brand,
       if (product.batch.isNotEmpty) 'Batch ${product.batch}',

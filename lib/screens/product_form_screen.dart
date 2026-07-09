@@ -19,14 +19,16 @@ class ProductFormScreen extends StatefulWidget {
 }
 
 class _ProductFormScreenState extends State<ProductFormScreen> {
+  static final _nzDateFmt = DateFormat('dd/MM/yyyy');
+
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _brandCtrl;
   late final TextEditingController _batchCtrl;
+  late final TextEditingController _expiryCtrl;
   late final TextEditingController _notesCtrl;
   late String _category;
   late int _quantity;
-  DateTime? _expiryDate;
   bool _saving = false;
   bool _rescanning = false;
   String? _scannedText;
@@ -38,15 +40,18 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     super.initState();
     final p = widget.product;
     final scan = widget.scanResult;
-    _nameCtrl = TextEditingController(text: p?.name ?? '');
+    _nameCtrl =
+        TextEditingController(text: p?.name ?? scan?.productName ?? '');
     _brandCtrl =
         TextEditingController(text: p?.brand ?? scan?.brand ?? '');
     _batchCtrl =
         TextEditingController(text: p?.batch ?? scan?.batch ?? '');
+    final initialExpiry = p?.expiryDate ?? scan?.expiryDate;
+    _expiryCtrl = TextEditingController(
+        text: initialExpiry == null ? '' : _nzDateFmt.format(initialExpiry));
     _notesCtrl = TextEditingController(text: p?.notes ?? '');
-    _category = p?.category ?? 'General';
+    _category = p?.category ?? scan?.category ?? 'General';
     _quantity = p?.quantity ?? 1;
-    _expiryDate = p?.expiryDate ?? scan?.expiryDate;
     _scannedText = scan?.rawText;
   }
 
@@ -55,6 +60,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _nameCtrl.dispose();
     _brandCtrl.dispose();
     _batchCtrl.dispose();
+    _expiryCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -68,19 +74,27 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       final result = await OcrService.instance.scanImage(photo.path);
       if (!mounted) return;
       setState(() {
-        if (result.expiryDate != null) _expiryDate = result.expiryDate;
+        if (result.expiryDate != null) {
+          _expiryCtrl.text = _nzDateFmt.format(result.expiryDate!);
+        }
         if (result.batch != null && _batchCtrl.text.isEmpty) {
           _batchCtrl.text = result.batch!;
         }
         if (result.brand != null && _brandCtrl.text.isEmpty) {
           _brandCtrl.text = result.brand!;
         }
+        if (result.productName != null && _nameCtrl.text.isEmpty) {
+          _nameCtrl.text = result.productName!;
+        }
+        if (result.category != null) _category = result.category!;
         _scannedText = result.rawText;
       });
       final found = [
+        if (result.productName != null) 'product',
+        if (result.brand != null) 'brand',
         if (result.expiryDate != null) 'expiry date',
         if (result.batch != null) 'batch',
-        if (result.brand != null) 'brand',
+        if (result.category != null) 'category',
       ];
       _snack(found.isEmpty
           ? 'No details recognized — try a closer, well-lit photo.'
@@ -94,20 +108,24 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
+    final current = DateParser.parseTypedDate(_expiryCtrl.text);
     final picked = await showDatePicker(
       context: context,
-      initialDate: _expiryDate ?? now.add(const Duration(days: 30)),
+      initialDate: current ?? now.add(const Duration(days: 30)),
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year + 20),
       helpText: 'Select expiry date',
     );
-    if (picked != null) setState(() => _expiryDate = picked);
+    if (picked != null) {
+      setState(() => _expiryCtrl.text = _nzDateFmt.format(picked));
+    }
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_expiryDate == null) {
-      _snack('Please set an expiry date.');
+    final expiryDate = DateParser.parseTypedDate(_expiryCtrl.text);
+    if (expiryDate == null) {
+      _snack('Please enter a valid expiry date (dd/mm/yyyy).');
       return;
     }
     setState(() => _saving = true);
@@ -119,7 +137,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         batch: _batchCtrl.text.trim(),
         category: _category,
         quantity: _quantity,
-        expiryDate: _expiryDate!,
+        expiryDate: expiryDate,
         addedDate: widget.product?.addedDate ?? DateTime.now(),
         notes: _notesCtrl.text.trim(),
       );
@@ -145,7 +163,6 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final dateFmt = DateFormat('d MMM yyyy');
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEdit ? 'Edit product' : 'Add product'),
@@ -226,28 +243,34 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 labelText: 'Category',
                 prefixIcon: Icon(Icons.category_outlined),
               ),
-              items: Product.categories
+              items: {..._categoryOptions()}
                   .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                   .toList(),
               onChanged: (v) => setState(() => _category = v ?? 'General'),
             ),
             const SizedBox(height: 12),
-            InkWell(
-              onTap: _pickDate,
-              child: InputDecorator(
-                decoration: const InputDecoration(
-                  labelText: 'Expiry date *',
-                  prefixIcon: Icon(Icons.event),
-                ),
-                child: Text(
-                  _expiryDate == null
-                      ? 'Tap to select'
-                      : dateFmt.format(_expiryDate!),
-                  style: TextStyle(
-                    color: _expiryDate == null ? Colors.grey : null,
-                  ),
+            TextFormField(
+              controller: _expiryCtrl,
+              decoration: InputDecoration(
+                labelText: 'Expiry date *',
+                hintText: 'dd/mm/yyyy',
+                prefixIcon: const Icon(Icons.event),
+                suffixIcon: IconButton(
+                  tooltip: 'Pick from calendar',
+                  icon: const Icon(Icons.calendar_month),
+                  onPressed: _pickDate,
                 ),
               ),
+              keyboardType: TextInputType.datetime,
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) {
+                  return 'Expiry date is required';
+                }
+                if (DateParser.parseTypedDate(v) == null) {
+                  return 'Enter a valid date as dd/mm/yyyy';
+                }
+                return null;
+              },
             ),
             const SizedBox(height: 12),
             Row(
@@ -315,12 +338,19 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     );
   }
 
+  /// Category list plus the product's saved category, so items saved before
+  /// a category rename still render in the dropdown.
+  List<String> _categoryOptions() =>
+      {...Product.categories, _category}.toList();
+
   String _scanSummary() {
     final scan = widget.scanResult!;
     final found = <String>[
+      if (scan.productName != null) 'product name',
+      if (scan.brand != null) 'brand',
       if (scan.expiryDate != null) 'expiry date',
       if (scan.batch != null) 'batch number',
-      if (scan.brand != null) 'brand',
+      if (scan.category != null) 'category',
     ];
     return found.isEmpty
         ? 'Scan complete, but no details were recognized. Fill the form manually or rescan with the camera button above.'

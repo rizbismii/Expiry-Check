@@ -5,10 +5,11 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
 ## Features
 
 - **AI camera scanning** — take a photo of a label; Google ML Kit text recognition (fully offline, free) reads it, and a smart parser extracts:
-  - expiry date (handles `EXP 15/08/2026`, `BEST BEFORE 03-12-27`, `12 AUG 2026`, `EXP 08/2026`, `2026-11-05`, and distinguishes MFG vs EXP dates)
-  - batch / lot number (`Batch No`, `B.No`, `LOT`, …)
-  - brand name (best-guess from the label text, always editable before saving)
-- **Inventory tracking** — name, brand, batch, category, quantity, notes; color-coded status (expired / expiring ≤ 30 days / fresh), search and filters.
+  - expiry date (handles `EXP 15/08/2026`, `BEST BEFORE 03-12-27`, `12 AUG 2026`, `EXP 08/2026`, `2026-11-05`, compact NZ formats like `EXP: 12052028`, and distinguishes MFG/PRO vs EXP dates)
+  - batch / lot number — labelled (`Batch No`, `B.No`, `LOT`, …) or unlabelled codes printed next to the date panel (e.g. `ALY32 260513`)
+  - brand name and product/flavour name combined with strength (e.g. "BERRY LEMON 11.4 mg/mL")
+  - category guess (e.g. "NICOTINE SALT E-LIQUID" → Salt Liquids)
+- **Inventory tracking** — name, brand, batch, category, quantity, notes; color-coded status (expired / expiring ≤ 30 days / fresh), search and filters. Categories: Shisha Flavours, Salt Liquids, Free Base Liquids, Detox Products, Prefilled Vape Pods, Prefilled Kits. Dates are shown and typed in NZ format (dd/mm/yyyy).
 - **Notifications**
   - weekly digest on a day/time you choose (default Monday 09:00)
   - per-product alert N days before expiry (3/7/14/30, default 7) and on expiry day
