@@ -15,7 +15,8 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
   - weekly digest on a day/time you choose (default Monday 09:00)
   - per-product alert N days before expiry (3/7/14/30, default 7) and on expiry day
   - reminders survive device reboots on Android
-- **Excel reports** — one tap generates an `.xlsx` with the full inventory (name, brand, batch, category, quantity, expiry, days left, status) plus a summary sheet, shared via the system share sheet (email, WhatsApp, Drive…).
+- **Excel reports** — choose the report basis (expiry date or added date) and an optional dd/mm/yyyy date range, then export an `.xlsx` with the inventory (brand, product, expiry, batch, category, quantity, days left, status) plus a summary sheet, shared via the system share sheet (email, WhatsApp, Drive…).
+- **Duplicate merging** — adding a product with the same brand, name, batch and expiry as an existing entry in the same store increases its quantity instead of creating a duplicate row.
 - **Backup & restore** — export a JSON backup and keep it wherever you like; restore it on any device.
 
 ## Storage: local-first (the cost-effective choice)

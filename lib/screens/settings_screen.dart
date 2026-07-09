@@ -7,6 +7,7 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
+import '../widgets/report_options_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -101,8 +102,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _snack('No products in ${store.name} to export yet.');
           return;
         }
-        await ExportService.instance
-            .shareExcelReport(products, storeName: store.name);
+        if (!mounted) return;
+        final options = await showReportOptionsDialog(context);
+        if (options == null) return;
+        final filtered = options.apply(products);
+        if (filtered.isEmpty) {
+          _snack('No products match the selected dates.');
+          return;
+        }
+        await ExportService.instance.shareExcelReport(filtered,
+            storeName: store.name, options: options);
       });
 
   Future<void> _backup() => _run(() async {

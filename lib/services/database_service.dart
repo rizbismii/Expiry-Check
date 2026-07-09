@@ -123,6 +123,31 @@ class DatabaseService {
     return rows.map(Product.fromMap).toList();
   }
 
+  /// Finds an existing product in the same store with the same brand, name,
+  /// batch and expiry date (case-insensitive), used to merge duplicates by
+  /// increasing quantity instead of adding a second row.
+  Future<Product?> findMatching(Product p) async {
+    final db = await database;
+    final rows = await db.query(
+      _table,
+      where: 'storeId = ? AND LOWER(TRIM(name)) = ? AND '
+          'LOWER(TRIM(brand)) = ? AND LOWER(TRIM(batch)) = ? AND '
+          'expiryDate = ?',
+      whereArgs: [
+        p.storeId,
+        p.name.trim().toLowerCase(),
+        p.brand.trim().toLowerCase(),
+        p.batch.trim().toLowerCase(),
+        p.expiryDate.toIso8601String(),
+      ],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final found = Product.fromMap(rows.first);
+    // Never merge into itself when editing.
+    return found.id == p.id ? null : found;
+  }
+
   Future<List<Product>> getExpiringWithin(int days) async {
     final all = await getAll();
     return all.where((p) => p.daysLeft <= days).toList();

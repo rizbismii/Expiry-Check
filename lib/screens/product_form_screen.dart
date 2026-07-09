@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
@@ -36,9 +37,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   late final TextEditingController _brandCtrl;
   late final TextEditingController _batchCtrl;
   late final TextEditingController _expiryCtrl;
+  late final TextEditingController _qtyCtrl;
   late final TextEditingController _notesCtrl;
   late String _category;
-  late int _quantity;
   late int _storeId;
   List<Store> _stores = [];
   bool _saving = false;
@@ -65,9 +66,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     final initialExpiry = p?.expiryDate ?? scan?.expiryDate;
     _expiryCtrl = TextEditingController(
         text: initialExpiry == null ? '' : _nzDateFmt.format(initialExpiry));
+    _qtyCtrl = TextEditingController(text: '${p?.quantity ?? 1}');
     _notesCtrl = TextEditingController(text: p?.notes ?? '');
     _category = p?.category ?? scan?.category ?? 'General';
-    _quantity = p?.quantity ?? 1;
     _scannedText = scan?.rawText;
   }
 
@@ -77,8 +78,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _brandCtrl.dispose();
     _batchCtrl.dispose();
     _expiryCtrl.dispose();
+    _qtyCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  int get _quantityValue => int.tryParse(_qtyCtrl.text.trim()) ?? 1;
+
+  void _bumpQuantity(int delta) {
+    final next = (_quantityValue + delta).clamp(1, 999999);
+    setState(() => _qtyCtrl.text = '$next');
   }
 
   Future<void> _rescan() async {
@@ -153,18 +162,36 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         brand: _brandCtrl.text.trim(),
         batch: _batchCtrl.text.trim(),
         category: _category,
-        quantity: _quantity,
+        quantity: _quantityValue,
         expiryDate: expiryDate,
         addedDate: widget.product?.addedDate ?? DateTime.now(),
         notes: _notesCtrl.text.trim(),
       );
+      String? mergeMessage;
       if (_isEdit) {
         await DatabaseService.instance.update(product);
       } else {
-        await DatabaseService.instance.insert(product);
+        // Same brand + product + batch + expiry in this store: top up the
+        // existing entry's quantity instead of creating a duplicate row.
+        final existing = await DatabaseService.instance.findMatching(product);
+        if (existing != null) {
+          final merged = existing.copyWith(
+              quantity: existing.quantity + product.quantity);
+          await DatabaseService.instance.update(merged);
+          mergeMessage =
+              'Already in the list — quantity increased to ${merged.quantity}.';
+        } else {
+          await DatabaseService.instance.insert(product);
+        }
       }
       await NotificationService.instance.rescheduleAll();
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) {
+        if (mergeMessage != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(mergeMessage)));
+        }
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       _snack('Save failed: $e');
       if (mounted) setState(() => _saving = false);
@@ -243,6 +270,15 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               const SizedBox(height: 12),
             ],
             TextFormField(
+              controller: _brandCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Brand name',
+                prefixIcon: Icon(Icons.sell_outlined),
+              ),
+              textCapitalization: TextCapitalization.words,
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
               controller: _nameCtrl,
               decoration: const InputDecoration(
                 labelText: 'Product name *',
@@ -251,36 +287,6 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               textCapitalization: TextCapitalization.words,
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Name is required' : null,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _brandCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Brand',
-                prefixIcon: Icon(Icons.sell_outlined),
-              ),
-              textCapitalization: TextCapitalization.words,
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: _batchCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Batch / lot number',
-                prefixIcon: Icon(Icons.qr_code_2),
-              ),
-              textCapitalization: TextCapitalization.characters,
-            ),
-            const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              value: _category,
-              decoration: const InputDecoration(
-                labelText: 'Category',
-                prefixIcon: Icon(Icons.category_outlined),
-              ),
-              items: {..._categoryOptions()}
-                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                  .toList(),
-              onChanged: (v) => setState(() => _category = v ?? 'General'),
             ),
             const SizedBox(height: 12),
             TextFormField(
@@ -307,23 +313,58 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               },
             ),
             const SizedBox(height: 12),
+            TextFormField(
+              controller: _batchCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Batch / lot number',
+                prefixIcon: Icon(Icons.qr_code_2),
+              ),
+              textCapitalization: TextCapitalization.characters,
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _category,
+              decoration: const InputDecoration(
+                labelText: 'Category',
+                prefixIcon: Icon(Icons.category_outlined),
+              ),
+              items: {..._categoryOptions()}
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => setState(() => _category = v ?? 'General'),
+            ),
+            const SizedBox(height: 12),
             Row(
               children: [
-                const Icon(Icons.numbers, color: Colors.grey),
-                const SizedBox(width: 12),
-                const Text('Quantity'),
-                const Spacer(),
+                Expanded(
+                  child: TextFormField(
+                    controller: _qtyCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Quantity *',
+                      prefixIcon: Icon(Icons.numbers),
+                    ),
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    // Refreshes the enabled state of the − button.
+                    onChanged: (_) => setState(() {}),
+                    validator: (v) {
+                      final n = int.tryParse((v ?? '').trim());
+                      if (n == null || n < 1) {
+                        return 'Enter a quantity of 1 or more';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
                 IconButton(
-                  onPressed: _quantity > 1
-                      ? () => setState(() => _quantity--)
-                      : null,
+                  tooltip: 'Decrease',
+                  onPressed:
+                      _quantityValue > 1 ? () => _bumpQuantity(-1) : null,
                   icon: const Icon(Icons.remove_circle_outline),
                 ),
-                Text('$_quantity',
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.bold)),
                 IconButton(
-                  onPressed: () => setState(() => _quantity++),
+                  tooltip: 'Increase',
+                  onPressed: () => _bumpQuantity(1),
                   icon: const Icon(Icons.add_circle_outline),
                 ),
               ],

@@ -35,10 +35,14 @@ class Product {
 
   bool get isExpiringSoon => daysLeft >= 0 && daysLeft <= 30;
 
+  /// Expiring between 31 and 90 days from today.
+  bool get isExpiring90 => daysLeft > 30 && daysLeft <= 90;
+
   String get statusLabel {
     if (isExpired) return 'Expired';
     if (daysLeft == 0) return 'Expires today';
     if (daysLeft <= 30) return 'Expiring soon';
+    if (daysLeft <= 90) return 'Expiring within 90 days';
     return 'Fresh';
   }
 

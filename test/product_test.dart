@@ -24,16 +24,25 @@ void main() {
       expect(p.statusLabel, 'Expires today');
     });
 
-    test('expiring soon', () {
+    test('expiring soon (within 30 days)', () {
       final p = make(expiry: DateTime.now().add(const Duration(days: 10)));
       expect(p.isExpiringSoon, isTrue);
+      expect(p.isExpiring90, isFalse);
       expect(p.statusLabel, 'Expiring soon');
     });
 
-    test('fresh', () {
-      final p = make(expiry: DateTime.now().add(const Duration(days: 90)));
+    test('expiring within 31-90 days', () {
+      final p = make(expiry: DateTime.now().add(const Duration(days: 60)));
+      expect(p.isExpiringSoon, isFalse);
+      expect(p.isExpiring90, isTrue);
+      expect(p.statusLabel, 'Expiring within 90 days');
+    });
+
+    test('fresh (more than 90 days)', () {
+      final p = make(expiry: DateTime.now().add(const Duration(days: 120)));
       expect(p.isExpired, isFalse);
       expect(p.isExpiringSoon, isFalse);
+      expect(p.isExpiring90, isFalse);
       expect(p.statusLabel, 'Fresh');
     });
   });

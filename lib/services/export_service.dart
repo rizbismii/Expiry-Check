@@ -16,6 +16,47 @@ class BackupData {
   const BackupData({required this.products, this.stores = const []});
 }
 
+enum ReportBasis { expiryDate, addedDate }
+
+/// User-selected report settings: which date the report is based on and an
+/// optional inclusive date range.
+class ReportOptions {
+  final ReportBasis basis;
+  final DateTime? from;
+  final DateTime? to;
+
+  const ReportOptions({
+    this.basis = ReportBasis.expiryDate,
+    this.from,
+    this.to,
+  });
+
+  String get basisLabel =>
+      basis == ReportBasis.expiryDate ? 'Expiry date' : 'Added date';
+
+  DateTime _basisDate(Product p) {
+    final d = basis == ReportBasis.expiryDate ? p.expiryDate : p.addedDate;
+    return DateTime(d.year, d.month, d.day);
+  }
+
+  List<Product> apply(List<Product> products) {
+    return products.where((p) {
+      final day = _basisDate(p);
+      if (from != null && day.isBefore(from!)) return false;
+      if (to != null && day.isAfter(to!)) return false;
+      return true;
+    }).toList()
+      ..sort((a, b) => _basisDate(a).compareTo(_basisDate(b)));
+  }
+
+  String rangeLabel(DateFormat fmt) {
+    if (from == null && to == null) return 'All dates';
+    final start = from != null ? fmt.format(from!) : 'Start';
+    final end = to != null ? fmt.format(to!) : 'Today onwards';
+    return '$start – $end';
+  }
+}
+
 /// Generates Excel reports and JSON backups. Files are saved to local app
 /// storage and offered via the system share sheet, so users can send them to
 /// Google Drive / iCloud / email at zero infrastructure cost.
@@ -28,7 +69,8 @@ class ExportService {
   static final _stampFmt = DateFormat('yyyyMMdd_HHmmss');
 
   Future<File> buildExcelReport(List<Product> products,
-      {required String storeName}) async {
+      {required String storeName,
+      ReportOptions options = const ReportOptions()}) async {
     final excel = Excel.createExcel();
     // Excel sheet names are limited to 31 chars and a restricted charset.
     final cleaned =
@@ -46,12 +88,12 @@ class ExportService {
       fontColorHex: ExcelColor.white,
     );
     const headers = [
+      'Brand Name',
       'Product Name',
-      'Brand',
-      'Batch No.',
+      'Expiry Date',
+      'Batch / Lot No.',
       'Category',
       'Quantity',
-      'Expiry Date',
       'Days Left',
       'Status',
       'Added On',
@@ -64,17 +106,16 @@ class ExportService {
       cell.cellStyle = headerStyle;
     }
 
-    final sorted = [...products]
-      ..sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
+    final sorted = options.apply(products);
     for (var r = 0; r < sorted.length; r++) {
       final p = sorted[r];
       final row = <CellValue>[
-        TextCellValue(p.name),
         TextCellValue(p.brand),
+        TextCellValue(p.name),
+        TextCellValue(_dateFmt.format(p.expiryDate)),
         TextCellValue(p.batch),
         TextCellValue(p.category),
         IntCellValue(p.quantity),
-        TextCellValue(_dateFmt.format(p.expiryDate)),
         IntCellValue(p.daysLeft),
         TextCellValue(p.statusLabel),
         TextCellValue(_dateFmt.format(p.addedDate)),
@@ -89,18 +130,23 @@ class ExportService {
 
     // Summary sheet.
     final summary = excel['Summary'];
-    final expired = products.where((p) => p.isExpired).length;
-    final soon = products.where((p) => p.isExpiringSoon).length;
+    final expired = sorted.where((p) => p.isExpired).length;
+    final soon = sorted.where((p) => p.isExpiringSoon).length;
+    final ninety = sorted.where((p) => p.isExpiring90).length;
     final rows = <List<CellValue>>[
       [TextCellValue('Store branch'), TextCellValue(storeName)],
+      [TextCellValue('Report based on'), TextCellValue(options.basisLabel)],
+      [TextCellValue('Date range'),
+        TextCellValue(options.rangeLabel(_dateFmt))],
       [TextCellValue('Report generated'),
         TextCellValue(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now()))],
-      [TextCellValue('Total products'), IntCellValue(products.length)],
+      [TextCellValue('Total products'), IntCellValue(sorted.length)],
       [TextCellValue('Expired'), IntCellValue(expired)],
       [TextCellValue('Expiring within 30 days'), IntCellValue(soon)],
+      [TextCellValue('Expiring within 31-90 days'), IntCellValue(ninety)],
       [
         TextCellValue('Fresh'),
-        IntCellValue(products.length - expired - soon),
+        IntCellValue(sorted.length - expired - soon - ninety),
       ],
     ];
     for (var r = 0; r < rows.length; r++) {
@@ -120,11 +166,13 @@ class ExportService {
   }
 
   Future<void> shareExcelReport(List<Product> products,
-      {required String storeName}) async {
-    final file = await buildExcelReport(products, storeName: storeName);
+      {required String storeName,
+      ReportOptions options = const ReportOptions()}) async {
+    final file = await buildExcelReport(products,
+        storeName: storeName, options: options);
     await SharePlus.instance.share(ShareParams(
       files: [XFile(file.path)],
-      subject: 'Expiry Check report — $storeName',
+      subject: 'Expiry Check report — $storeName (${options.basisLabel})',
       text: 'Inventory report for $storeName generated by Expiry Check.',
     ));
   }

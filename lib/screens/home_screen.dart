@@ -10,10 +10,11 @@ import '../services/export_service.dart';
 import '../services/notification_service.dart';
 import '../services/ocr_service.dart';
 import '../utils/date_parser.dart';
+import '../widgets/report_options_dialog.dart';
 import 'product_form_screen.dart';
 import 'settings_screen.dart';
 
-enum _Filter { all, expiringSoon, expired, fresh }
+enum _Filter { all, expired, soon30, soon90, fresh }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -70,12 +71,16 @@ class _HomeScreenState extends State<HomeScreen> {
   List<Product> get _visible {
     var list = _products;
     switch (_filter) {
-      case _Filter.expiringSoon:
-        list = list.where((p) => p.isExpiringSoon).toList();
       case _Filter.expired:
         list = list.where((p) => p.isExpired).toList();
+      case _Filter.soon30:
+        list = list.where((p) => p.isExpiringSoon).toList();
+      case _Filter.soon90:
+        list = list.where((p) => p.isExpiring90).toList();
       case _Filter.fresh:
-        list = list.where((p) => !p.isExpired && !p.isExpiringSoon).toList();
+        list = list
+            .where((p) => !p.isExpired && !p.isExpiringSoon && !p.isExpiring90)
+            .toList();
       case _Filter.all:
         break;
     }
@@ -135,10 +140,18 @@ class _HomeScreenState extends State<HomeScreen> {
       _snack('No products in this store to export yet.');
       return;
     }
+    final options = await showReportOptionsDialog(context);
+    if (options == null) return;
+    final filtered = options.apply(_products);
+    if (filtered.isEmpty) {
+      _snack('No products match the selected dates.');
+      return;
+    }
     try {
       await ExportService.instance.shareExcelReport(
-        _products,
+        filtered,
         storeName: _currentStore?.name ?? 'Store',
+        options: options,
       );
     } catch (e) {
       _snack('Export failed: $e');
@@ -260,16 +273,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildSummaryBar() {
     final expired = _products.where((p) => p.isExpired).length;
-    final soon = _products.where((p) => p.isExpiringSoon).length;
-    final fresh = _products.length - expired - soon;
+    final soon30 = _products.where((p) => p.isExpiringSoon).length;
+    final soon90 = _products.where((p) => p.isExpiring90).length;
+    final fresh = _products.length - expired - soon30 - soon90;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Row(
         children: [
           _summaryChip('Expired', expired, Colors.red, _Filter.expired),
-          const SizedBox(width: 8),
-          _summaryChip('≤ 30 days', soon, Colors.orange, _Filter.expiringSoon),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          _summaryChip('≤30 days', soon30, Colors.orange, _Filter.soon30),
+          const SizedBox(width: 6),
+          _summaryChip('≤90 days', soon90, Colors.amber, _Filter.soon90),
+          const SizedBox(width: 6),
           _summaryChip('Fresh', fresh, Colors.green, _Filter.fresh),
         ],
       ),
@@ -345,10 +361,15 @@ class _HomeScreenState extends State<HomeScreen> {
         ? Colors.red
         : product.isExpiringSoon
             ? Colors.orange
-            : Colors.green;
+            : product.isExpiring90
+                ? Colors.amber
+                : Colors.green;
     final dateFmt = DateFormat('dd/MM/yyyy');
+    // Brand first, then product name, matching the form and report order.
+    final title = product.brand.isNotEmpty
+        ? '${product.brand} — ${product.name}'
+        : product.name;
     final subtitleParts = <String>[
-      if (product.brand.isNotEmpty) product.brand,
       if (product.batch.isNotEmpty) 'Batch ${product.batch}',
       'Qty ${product.quantity}',
     ];
@@ -388,13 +409,13 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Icon(
               product.isExpired
                   ? Icons.error_outline
-                  : product.isExpiringSoon
+                  : (product.isExpiringSoon || product.isExpiring90)
                       ? Icons.schedule
                       : Icons.check_circle_outline,
               color: color,
             ),
           ),
-          title: Text(product.name,
+          title: Text(title,
               style: const TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Text(
             '${subtitleParts.join(' • ')}\n'
