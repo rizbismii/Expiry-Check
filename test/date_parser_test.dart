@@ -94,6 +94,13 @@ void main() {
       expect(DateParser.parseTypedDate('12/2028'), isNull);
       expect(DateParser.parseTypedDate('hello'), isNull);
     });
+
+    test('accepts compact digit-only input (no slashes)', () {
+      expect(DateParser.parseTypedDate('19022027'), DateTime(2027, 2, 19));
+      expect(DateParser.parseTypedDate('190227'), DateTime(2027, 2, 19));
+      expect(DateParser.parseTypedDate('12052028'), DateTime(2028, 5, 12));
+      expect(DateParser.parseTypedDate('99999999'), isNull);
+    });
   });
 
   group('DateParser batch numbers', () {

@@ -7,7 +7,9 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
+import '../services/user_service.dart';
 import '../widgets/report_options_dialog.dart';
+import 'login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -30,6 +32,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _weekday = DateTime.monday;
   int _hour = 9;
   int _leadDays = 7;
+  String _frequency = 'weekly';
+  int _dayOfMonth = 1;
+  String _username = '';
+  String _email = '';
   List<Store> _stores = [];
   bool _loading = true;
   bool _busy = false;
@@ -45,16 +51,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final weekday = await service.getWeeklyWeekday();
     final hour = await service.getWeeklyHour();
     final leadDays = await service.getLeadDays();
+    final frequency = await service.getFrequency();
+    final dayOfMonth = await service.getDayOfMonth();
     final stores = await DatabaseService.instance.getStores();
+    final username = await UserService.instance.username ?? '';
+    final email = await UserService.instance.email ?? '';
     if (!mounted) return;
     setState(() {
       _weekday = weekday;
       _hour = hour;
       _leadDays = leadDays;
+      _frequency = frequency;
+      _dayOfMonth = dayOfMonth;
       _stores = stores;
+      _username = username;
+      _email = email;
       _loading = false;
     });
   }
+
+  Future<void> _signOut() async {
+    await UserService.instance.signOut();
+    if (!mounted) return;
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    await _load();
+  }
+
+  Future<void> _cleanupDuplicates() => _run(() async {
+        final removed = await DatabaseService.instance.mergeDuplicates();
+        await NotificationService.instance.rescheduleAll();
+        _snack(removed == 0
+            ? 'No duplicate rows found.'
+            : 'Merged $removed duplicate row(s) — quantities were combined.');
+      });
 
   Future<void> _renameStore(Store store) async {
     final controller = TextEditingController(text: store.name);
@@ -91,6 +122,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       weekday: _weekday,
       hour: _hour,
       leadDays: _leadDays,
+      frequency: _frequency,
+      dayOfMonth: _dayOfMonth,
     );
     _snack('Notification schedule updated.');
   }
@@ -110,8 +143,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _snack('No products match the selected dates.');
           return;
         }
+        final deletionLog =
+            await DatabaseService.instance.getDeletionLog(storeId: store.id);
         await ExportService.instance.shareExcelReport(filtered,
-            storeName: store.name, options: options);
+            storeName: store.name,
+            options: options,
+            deletionLog: deletionLog,
+            generatedBy: _username);
+      });
+
+  Future<void> _exportAllStores() => _run(() async {
+        final products = await DatabaseService.instance.getAll();
+        if (products.isEmpty) {
+          _snack('No products to export yet.');
+          return;
+        }
+        if (!mounted) return;
+        final options = await showReportOptionsDialog(context);
+        if (options == null) return;
+        final filtered = options.apply(products);
+        if (filtered.isEmpty) {
+          _snack('No products match the selected dates.');
+          return;
+        }
+        final deletionLog = await DatabaseService.instance.getDeletionLog();
+        await ExportService.instance.shareExcelReport(
+          filtered,
+          storeName: 'All Stores',
+          options: options,
+          storeNames: {for (final s in _stores) s.id: s.name},
+          deletionLog: deletionLog,
+          generatedBy: _username,
+        );
       });
 
   Future<void> _backup() => _run(() async {
@@ -187,6 +250,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                _sectionTitle('Profile'),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      child: Text(_username.isNotEmpty
+                          ? _username[0].toUpperCase()
+                          : '?'),
+                    ),
+                    title: Text(
+                        _username.isNotEmpty ? _username : 'Not signed in'),
+                    subtitle: Text(_email.isNotEmpty
+                        ? _email
+                        : 'Sign in so reports show who created entries'),
+                    trailing: TextButton.icon(
+                      onPressed: _busy ? null : _signOut,
+                      icon: const Icon(Icons.logout, size: 18),
+                      label: Text(
+                          _username.isNotEmpty ? 'Switch user' : 'Sign in'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
                 _sectionTitle('Store branches'),
                 Card(
                   margin: EdgeInsets.zero,
@@ -206,25 +292,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                _sectionTitle('Weekly notifications'),
+                _sectionTitle('Stock dashboard notifications'),
                 Card(
                   margin: EdgeInsets.zero,
                   child: Column(
                     children: [
                       ListTile(
-                        leading: const Icon(Icons.calendar_view_week),
-                        title: const Text('Digest day'),
-                        trailing: DropdownButton<int>(
-                          value: _weekday,
+                        leading: const Icon(Icons.repeat),
+                        title: const Text('Frequency'),
+                        trailing: DropdownButton<String>(
+                          value: _frequency,
                           underline: const SizedBox.shrink(),
-                          items: _weekdays.entries
-                              .map((e) => DropdownMenuItem(
-                                  value: e.key, child: Text(e.value)))
-                              .toList(),
+                          items: const [
+                            DropdownMenuItem(
+                                value: 'weekly', child: Text('Weekly')),
+                            DropdownMenuItem(
+                                value: 'monthly', child: Text('Monthly')),
+                          ],
                           onChanged: (v) =>
-                              setState(() => _weekday = v ?? _weekday),
+                              setState(() => _frequency = v ?? _frequency),
                         ),
                       ),
+                      if (_frequency == 'weekly')
+                        ListTile(
+                          leading: const Icon(Icons.calendar_view_week),
+                          title: const Text('Digest day'),
+                          trailing: DropdownButton<int>(
+                            value: _weekday,
+                            underline: const SizedBox.shrink(),
+                            items: _weekdays.entries
+                                .map((e) => DropdownMenuItem(
+                                    value: e.key, child: Text(e.value)))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => _weekday = v ?? _weekday),
+                          ),
+                        )
+                      else
+                        ListTile(
+                          leading: const Icon(Icons.calendar_month),
+                          title: const Text('Day of month'),
+                          trailing: DropdownButton<int>(
+                            value: _dayOfMonth,
+                            underline: const SizedBox.shrink(),
+                            items: List.generate(28, (i) => i + 1)
+                                .map((d) => DropdownMenuItem(
+                                    value: d, child: Text('$d')))
+                                .toList(),
+                            onChanged: (v) =>
+                                setState(() => _dayOfMonth = v ?? _dayOfMonth),
+                          ),
+                        ),
                       ListTile(
                         leading: const Icon(Icons.access_time),
                         title: const Text('Notification time'),
@@ -246,7 +364,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         trailing: DropdownButton<int>(
                           value: _leadDays,
                           underline: const SizedBox.shrink(),
-                          items: const [3, 7, 14, 30]
+                          items: NotificationService.leadDayOptions
                               .map((d) => DropdownMenuItem(
                                   value: d, child: Text('$d days')))
                               .toList(),
@@ -266,24 +384,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
-                _sectionTitle('Excel reports (per store)'),
+                _sectionTitle('Excel reports'),
                 Card(
                   margin: EdgeInsets.zero,
                   child: Column(
                     children: [
-                      for (var i = 0; i < _stores.length; i++) ...[
-                        if (i > 0) const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.storefront),
+                        title: const Text('Export All Stores (combined)'),
+                        subtitle: const Text(
+                            'Every branch in one report with a Store column'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: _busy ? null : _exportAllStores,
+                      ),
+                      for (final store in _stores) ...[
+                        const Divider(height: 1),
                         ListTile(
                           leading: const Icon(Icons.table_view),
-                          title: Text('Export ${_stores[i].name}'),
+                          title: Text('Export ${store.name}'),
                           subtitle: const Text(
                               'Inventory with brand, batch, expiry and status'),
                           trailing: const Icon(Icons.chevron_right),
-                          onTap:
-                              _busy ? null : () => _exportExcel(_stores[i]),
+                          onTap: _busy ? null : () => _exportExcel(store),
                         ),
                       ],
                     ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                _sectionTitle('Inventory maintenance'),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: const Icon(Icons.merge_type),
+                    title: const Text('Clean up duplicate rows'),
+                    subtitle: const Text(
+                        'Merges rows with the same brand, product, batch and '
+                        'expiry (ignoring case and spacing) by combining '
+                        'quantities'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: _busy ? null : _cleanupDuplicates,
                   ),
                 ),
                 const SizedBox(height: 24),

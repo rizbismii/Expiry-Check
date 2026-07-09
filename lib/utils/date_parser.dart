@@ -148,9 +148,27 @@ class DateParser {
   }
 
   /// Parses a manually typed NZ-format date (dd/mm/yyyy, also accepts
-  /// dd-mm-yyyy, dd.mm.yyyy and 2-digit years).
+  /// dd-mm-yyyy, dd.mm.yyyy, 2-digit years, and compact digit-only input
+  /// such as 19022027 or 190227).
   static DateTime? parseTypedDate(String input) {
     final cleaned = input.trim().replaceAll(RegExp(r'[-. ]'), '/');
+    // Compact input without separators: ddmmyyyy or ddmmyy.
+    if (RegExp(r'^\d{8}$').hasMatch(cleaned)) {
+      return _safeDate(
+        int.parse(cleaned.substring(4, 8)),
+        int.parse(cleaned.substring(2, 4)),
+        int.parse(cleaned.substring(0, 2)),
+        minYear: 1990,
+      );
+    }
+    if (RegExp(r'^\d{6}$').hasMatch(cleaned)) {
+      return _safeDate(
+        2000 + int.parse(cleaned.substring(4, 6)),
+        int.parse(cleaned.substring(2, 4)),
+        int.parse(cleaned.substring(0, 2)),
+        minYear: 1990,
+      );
+    }
     final parts = cleaned.split('/');
     if (parts.length != 3) return null;
     final day = int.tryParse(parts[0]);

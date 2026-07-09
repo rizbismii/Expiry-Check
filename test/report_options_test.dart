@@ -52,6 +52,18 @@ void main() {
       expect(const ReportOptions().basisLabel, 'Expiry date');
       expect(const ReportOptions(basis: ReportBasis.addedDate).basisLabel,
           'Added date');
+      expect(const ReportOptions(basis: ReportBasis.all).basisLabel,
+          'All products');
+    });
+
+    test('All basis ignores any range and keeps everything', () {
+      final options = ReportOptions(
+        basis: ReportBasis.all,
+        from: DateTime(2030, 1, 1),
+        to: DateTime(2030, 1, 2),
+      );
+      expect(options.apply(all), hasLength(3));
+      expect(options.rangeLabel(fmt), 'All dates');
     });
 
     test('range label', () {
