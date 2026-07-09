@@ -57,6 +57,43 @@ void main() {
       final r = DateParser.parse('EXP 31/02/2026');
       expect(r.expiryDate, isNull);
     });
+
+    test('parses compact ddmmyyyy (NZ vape packaging)', () {
+      final r = DateParser.parse('EXP: 12052028');
+      expect(r.expiryDate, DateTime(2028, 5, 12));
+    });
+
+    test('compact PRO date is treated as manufacture, not expiry', () {
+      final r = DateParser.parse('PRO: 13052026\nEXP: 12052028');
+      expect(r.expiryDate, DateTime(2028, 5, 12));
+    });
+
+    test('parses compact yyyymmdd', () {
+      final r = DateParser.parse('EXP 20280512');
+      expect(r.expiryDate, DateTime(2028, 5, 12));
+    });
+
+    test('parses compact ddmmyy on expiry keyword line', () {
+      final r = DateParser.parse('EXP 120528');
+      expect(r.expiryDate, DateTime(2028, 5, 12));
+    });
+  });
+
+  group('DateParser.parseTypedDate (NZ manual input)', () {
+    test('parses dd/mm/yyyy', () {
+      expect(DateParser.parseTypedDate('12/05/2028'), DateTime(2028, 5, 12));
+    });
+
+    test('parses d/m/yy and other separators', () {
+      expect(DateParser.parseTypedDate('3-8-26'), DateTime(2026, 8, 3));
+      expect(DateParser.parseTypedDate('03.08.2026'), DateTime(2026, 8, 3));
+    });
+
+    test('rejects invalid input', () {
+      expect(DateParser.parseTypedDate('31/02/2026'), isNull);
+      expect(DateParser.parseTypedDate('12/2028'), isNull);
+      expect(DateParser.parseTypedDate('hello'), isNull);
+    });
   });
 
   group('DateParser batch numbers', () {
@@ -78,6 +115,43 @@ void main() {
     test('returns null when absent', () {
       final r = DateParser.parse('EXP 12/2026');
       expect(r.batch, isNull);
+    });
+
+    test('picks up unlabelled code next to EXP/PRO lines', () {
+      final r = DateParser.parse('PRO: 13052026\nEXP: 12052028\nALY32 260513');
+      expect(r.batch, 'ALY32 260513');
+    });
+  });
+
+  group('DateParser strength and category', () {
+    test('extracts mg/mL strength, even when OCR splits lines', () {
+      final r = DateParser.parse('11.4\nmg/mL\nNicotine Concentration');
+      expect(r.strength, '11.4 mg/mL');
+      final r2 = DateParser.parse('11.4 mg/mL Nicotine Concentration');
+      expect(r2.strength, '11.4 mg/mL');
+    });
+
+    test('extracts plain mg and percentage', () {
+      expect(DateParser.parse('Nicotine 50mg').strength, '50 mg');
+      expect(DateParser.parse('Nicotine 3% by volume').strength, '3%');
+    });
+
+    test('guesses category from label text', () {
+      expect(DateParser.parse('NICOTINE SALT E-LIQUID').category,
+          'Salt Liquids');
+      expect(DateParser.parse('Premium Shisha Flavour').category,
+          'Shisha Flavours');
+      expect(DateParser.parse('FREEBASE E-LIQUID 70/30').category,
+          'Free Base Liquids');
+      expect(DateParser.parse('FREE BASE E-LIQUID 70/30').category,
+          'Free Base Liquids');
+      expect(DateParser.parse('Prefilled replacement pod 2ml').category,
+          'Prefilled Vape Pods');
+      expect(DateParser.parse('Starter kit with charger').category,
+          'Prefilled Kits');
+      expect(DateParser.parse('7-day detox drink').category,
+          'Detox Products');
+      expect(DateParser.parse('Plain biscuit').category, isNull);
     });
   });
 
@@ -106,6 +180,36 @@ Batch No: CG44521
       expect(r.brand, 'Colgate MaxFresh');
       expect(r.expiryDate, DateTime(2027, 1, 31));
       expect(r.batch, 'CG44521');
+    });
+
+    test('NZ nicotine salt e-liquid box (front + bottom panels)', () {
+      // Mirrors the real label: Salty Fizzy World "Berry Lemon" 11.4 mg/mL.
+      const label = '''
+WWW.SALTYWORLD.CO
+SALTY FIZZY WORLD
+ICE EDITION
+NICOTINE SALT E-LIQUID
+BERRY LEMON
+18+
+11.4 mg/mL
+Nicotine Concentration
+THIS PRODUCT CONTAINS NICOTINE,
+WHICH IS A HIGHLY ADDICTIVE SUBSTANCE
+HE NIKOTINI KEI ROTO I TENEI MEA, HE
+MATU TINO WHAKAWARA
+8 19412 02557 6
+PRO: 13052026
+EXP: 12052028
+ALY32 260513
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.brand, 'SALTY FIZZY WORLD');
+      expect(r.productName, 'BERRY LEMON 11.4 mg/mL');
+      expect(r.strength, '11.4 mg/mL');
+      expect(r.expiryDate, DateTime(2028, 5, 12));
+      expect(r.batch, 'ALY32 260513');
+      expect(r.category, 'Salt Liquids');
     });
   });
 }

@@ -123,11 +123,14 @@ class NotificationService {
     await _plugin.cancelAll();
 
     final products = await DatabaseService.instance.getAll();
+    final stores = await DatabaseService.instance.getStores();
+    final storeNames = {for (final s in stores) s.id: s.name};
     final leadDays = await getLeadDays();
 
     await _scheduleWeeklyDigest(products, leadDays);
     for (final product in products) {
-      await _scheduleProductReminders(product, leadDays);
+      await _scheduleProductReminders(
+          product, leadDays, storeNames[product.storeId]);
     }
   }
 
@@ -157,7 +160,8 @@ class NotificationService {
     );
   }
 
-  Future<void> _scheduleProductReminders(Product product, int leadDays) async {
+  Future<void> _scheduleProductReminders(
+      Product product, int leadDays, String? storeName) async {
     if (product.id == null) return;
     final hour = await getWeeklyHour();
     final expiry = tz.TZDateTime(
@@ -174,7 +178,7 @@ class NotificationService {
       await _zonedSchedule(
         id: product.id! * 10 + 2,
         title: '${product.name} expires in $leadDays days',
-        body: _productBody(product),
+        body: _productBody(product, storeName),
         when: lead,
         details: _productDetails,
       );
@@ -183,15 +187,16 @@ class NotificationService {
       await _zonedSchedule(
         id: product.id! * 10 + 3,
         title: '${product.name} expires today',
-        body: _productBody(product),
+        body: _productBody(product, storeName),
         when: expiry,
         details: _productDetails,
       );
     }
   }
 
-  String _productBody(Product product) {
+  String _productBody(Product product, String? storeName) {
     final parts = <String>[
+      if (storeName != null && storeName.isNotEmpty) storeName,
       if (product.brand.isNotEmpty) 'Brand: ${product.brand}',
       if (product.batch.isNotEmpty) 'Batch: ${product.batch}',
       'Qty: ${product.quantity}',

@@ -7,6 +7,55 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../models/product.dart';
+import '../models/store.dart';
+
+class BackupData {
+  final List<Product> products;
+  final List<Store> stores;
+
+  const BackupData({required this.products, this.stores = const []});
+}
+
+enum ReportBasis { expiryDate, addedDate }
+
+/// User-selected report settings: which date the report is based on and an
+/// optional inclusive date range.
+class ReportOptions {
+  final ReportBasis basis;
+  final DateTime? from;
+  final DateTime? to;
+
+  const ReportOptions({
+    this.basis = ReportBasis.expiryDate,
+    this.from,
+    this.to,
+  });
+
+  String get basisLabel =>
+      basis == ReportBasis.expiryDate ? 'Expiry date' : 'Added date';
+
+  DateTime _basisDate(Product p) {
+    final d = basis == ReportBasis.expiryDate ? p.expiryDate : p.addedDate;
+    return DateTime(d.year, d.month, d.day);
+  }
+
+  List<Product> apply(List<Product> products) {
+    return products.where((p) {
+      final day = _basisDate(p);
+      if (from != null && day.isBefore(from!)) return false;
+      if (to != null && day.isAfter(to!)) return false;
+      return true;
+    }).toList()
+      ..sort((a, b) => _basisDate(a).compareTo(_basisDate(b)));
+  }
+
+  String rangeLabel(DateFormat fmt) {
+    if (from == null && to == null) return 'All dates';
+    final start = from != null ? fmt.format(from!) : 'Start';
+    final end = to != null ? fmt.format(to!) : 'Today onwards';
+    return '$start – $end';
+  }
+}
 
 /// Generates Excel reports and JSON backups. Files are saved to local app
 /// storage and offered via the system share sheet, so users can send them to
@@ -15,13 +64,22 @@ class ExportService {
   ExportService._();
   static final ExportService instance = ExportService._();
 
-  static final _dateFmt = DateFormat('yyyy-MM-dd');
+  // NZ date format for report columns.
+  static final _dateFmt = DateFormat('dd/MM/yyyy');
   static final _stampFmt = DateFormat('yyyyMMdd_HHmmss');
 
-  Future<File> buildExcelReport(List<Product> products) async {
+  Future<File> buildExcelReport(List<Product> products,
+      {required String storeName,
+      ReportOptions options = const ReportOptions()}) async {
     final excel = Excel.createExcel();
-    final sheet = excel['Inventory'];
-    excel.setDefaultSheet('Inventory');
+    // Excel sheet names are limited to 31 chars and a restricted charset.
+    final cleaned =
+        storeName.replaceAll(RegExp(r'[\[\]\*\?:\/\\]'), ' ').trim();
+    final sheetName = cleaned.isEmpty ? 'Inventory' : cleaned;
+    final safeSheetName =
+        sheetName.length > 31 ? sheetName.substring(0, 31) : sheetName;
+    final sheet = excel[safeSheetName];
+    excel.setDefaultSheet(safeSheetName);
     excel.delete('Sheet1');
 
     final headerStyle = CellStyle(
@@ -30,12 +88,12 @@ class ExportService {
       fontColorHex: ExcelColor.white,
     );
     const headers = [
+      'Brand Name',
       'Product Name',
-      'Brand',
-      'Batch No.',
+      'Expiry Date',
+      'Batch / Lot No.',
       'Category',
       'Quantity',
-      'Expiry Date',
       'Days Left',
       'Status',
       'Added On',
@@ -48,17 +106,16 @@ class ExportService {
       cell.cellStyle = headerStyle;
     }
 
-    final sorted = [...products]
-      ..sort((a, b) => a.expiryDate.compareTo(b.expiryDate));
+    final sorted = options.apply(products);
     for (var r = 0; r < sorted.length; r++) {
       final p = sorted[r];
       final row = <CellValue>[
-        TextCellValue(p.name),
         TextCellValue(p.brand),
+        TextCellValue(p.name),
+        TextCellValue(_dateFmt.format(p.expiryDate)),
         TextCellValue(p.batch),
         TextCellValue(p.category),
         IntCellValue(p.quantity),
-        TextCellValue(_dateFmt.format(p.expiryDate)),
         IntCellValue(p.daysLeft),
         TextCellValue(p.statusLabel),
         TextCellValue(_dateFmt.format(p.addedDate)),
@@ -73,17 +130,23 @@ class ExportService {
 
     // Summary sheet.
     final summary = excel['Summary'];
-    final expired = products.where((p) => p.isExpired).length;
-    final soon = products.where((p) => p.isExpiringSoon).length;
+    final expired = sorted.where((p) => p.isExpired).length;
+    final soon = sorted.where((p) => p.isExpiringSoon).length;
+    final ninety = sorted.where((p) => p.isExpiring90).length;
     final rows = <List<CellValue>>[
+      [TextCellValue('Store branch'), TextCellValue(storeName)],
+      [TextCellValue('Report based on'), TextCellValue(options.basisLabel)],
+      [TextCellValue('Date range'),
+        TextCellValue(options.rangeLabel(_dateFmt))],
       [TextCellValue('Report generated'),
-        TextCellValue(DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now()))],
-      [TextCellValue('Total products'), IntCellValue(products.length)],
+        TextCellValue(DateFormat('dd/MM/yyyy HH:mm').format(DateTime.now()))],
+      [TextCellValue('Total products'), IntCellValue(sorted.length)],
       [TextCellValue('Expired'), IntCellValue(expired)],
       [TextCellValue('Expiring within 30 days'), IntCellValue(soon)],
+      [TextCellValue('Expiring within 31-90 days'), IntCellValue(ninety)],
       [
         TextCellValue('Fresh'),
-        IntCellValue(products.length - expired - soon),
+        IntCellValue(sorted.length - expired - soon - ninety),
       ],
     ];
     for (var r = 0; r < rows.length; r++) {
@@ -95,29 +158,35 @@ class ExportService {
     }
 
     final dir = await getApplicationDocumentsDirectory();
+    final slug = _slugify(storeName);
     final file = File(
-        '${dir.path}/expiry_report_${_stampFmt.format(DateTime.now())}.xlsx');
+        '${dir.path}/expiry_report_${slug}_${_stampFmt.format(DateTime.now())}.xlsx');
     await file.writeAsBytes(excel.encode()!, flush: true);
     return file;
   }
 
-  Future<void> shareExcelReport(List<Product> products) async {
-    final file = await buildExcelReport(products);
+  Future<void> shareExcelReport(List<Product> products,
+      {required String storeName,
+      ReportOptions options = const ReportOptions()}) async {
+    final file = await buildExcelReport(products,
+        storeName: storeName, options: options);
     await SharePlus.instance.share(ShareParams(
       files: [XFile(file.path)],
-      subject: 'Expiry Check inventory report',
-      text: 'Inventory report generated by Expiry Check.',
+      subject: 'Expiry Check report — $storeName (${options.basisLabel})',
+      text: 'Inventory report for $storeName generated by Expiry Check.',
     ));
   }
 
-  Future<File> buildJsonBackup(List<Product> products) async {
+  Future<File> buildJsonBackup(
+      List<Product> products, List<Store> stores) async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File(
         '${dir.path}/expiry_backup_${_stampFmt.format(DateTime.now())}.json');
     final payload = {
       'app': 'expiry_check',
-      'version': 1,
+      'version': 2,
       'exportedAt': DateTime.now().toIso8601String(),
+      'stores': stores.map((s) => s.toMap()).toList(),
       'products': products.map((p) => p.toMap()..remove('id')).toList(),
     };
     await file.writeAsString(
@@ -126,8 +195,9 @@ class ExportService {
     return file;
   }
 
-  Future<void> shareJsonBackup(List<Product> products) async {
-    final file = await buildJsonBackup(products);
+  Future<void> shareJsonBackup(
+      List<Product> products, List<Store> stores) async {
+    final file = await buildJsonBackup(products, stores);
     await SharePlus.instance.share(ShareParams(
       files: [XFile(file.path)],
       subject: 'Expiry Check backup',
@@ -135,14 +205,28 @@ class ExportService {
     ));
   }
 
-  List<Product> parseBackup(String jsonString) {
+  BackupData parseBackup(String jsonString) {
     final decoded = json.decode(jsonString);
     if (decoded is! Map<String, dynamic> || decoded['app'] != 'expiry_check') {
       throw const FormatException('Not a valid Expiry Check backup file.');
     }
     final items = decoded['products'] as List<dynamic>;
-    return items
+    final products = items
         .map((e) => Product.fromMap(Map<String, dynamic>.from(e as Map)))
         .toList();
+    // Version 1 backups had no store list; products default to store 1.
+    final storeItems = decoded['stores'] as List<dynamic>? ?? const [];
+    final stores = storeItems
+        .map((e) => Store.fromMap(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    return BackupData(products: products, stores: stores);
+  }
+
+  static String _slugify(String value) {
+    final slug = value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '_')
+        .replaceAll(RegExp(r'^_+|_+$'), '');
+    return slug.isEmpty ? 'store' : slug;
   }
 }

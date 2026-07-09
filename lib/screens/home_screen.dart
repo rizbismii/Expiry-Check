@@ -1,17 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/product.dart';
+import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
 import '../services/ocr_service.dart';
 import '../utils/date_parser.dart';
+import '../widgets/report_options_dialog.dart';
 import 'product_form_screen.dart';
 import 'settings_screen.dart';
 
-enum _Filter { all, expiringSoon, expired, fresh }
+enum _Filter { all, expired, soon30, soon90, fresh }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -21,11 +24,18 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const _storePrefKey = 'selected_store_id';
+
   List<Product> _products = [];
+  List<Store> _stores = [];
+  int _storeId = 1;
   bool _loading = true;
   bool _scanning = false;
   _Filter _filter = _Filter.all;
   String _search = '';
+
+  Store? get _currentStore =>
+      _stores.where((s) => s.id == _storeId).firstOrNull;
 
   @override
   void initState() {
@@ -35,23 +45,42 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    final products = await DatabaseService.instance.getAll();
+    final stores = await DatabaseService.instance.getStores();
+    final prefs = await SharedPreferences.getInstance();
+    var storeId = prefs.getInt(_storePrefKey) ?? _storeId;
+    if (!stores.any((s) => s.id == storeId) && stores.isNotEmpty) {
+      storeId = stores.first.id;
+    }
+    final products = await DatabaseService.instance.getAll(storeId: storeId);
     if (!mounted) return;
     setState(() {
+      _stores = stores;
+      _storeId = storeId;
       _products = products;
       _loading = false;
     });
   }
 
+  Future<void> _switchStore(int storeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_storePrefKey, storeId);
+    setState(() => _storeId = storeId);
+    await _load();
+  }
+
   List<Product> get _visible {
     var list = _products;
     switch (_filter) {
-      case _Filter.expiringSoon:
-        list = list.where((p) => p.isExpiringSoon).toList();
       case _Filter.expired:
         list = list.where((p) => p.isExpired).toList();
+      case _Filter.soon30:
+        list = list.where((p) => p.isExpiringSoon).toList();
+      case _Filter.soon90:
+        list = list.where((p) => p.isExpiring90).toList();
       case _Filter.fresh:
-        list = list.where((p) => !p.isExpired && !p.isExpiringSoon).toList();
+        list = list
+            .where((p) => !p.isExpired && !p.isExpiringSoon && !p.isExpiring90)
+            .toList();
       case _Filter.all:
         break;
     }
@@ -89,8 +118,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openForm({Product? product, OcrParseResult? scanResult}) async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) =>
-            ProductFormScreen(product: product, scanResult: scanResult),
+        builder: (_) => ProductFormScreen(
+          product: product,
+          scanResult: scanResult,
+          storeId: _storeId,
+        ),
       ),
     );
     if (changed == true) _load();
@@ -105,11 +137,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _exportExcel() async {
     if (_products.isEmpty) {
-      _snack('No products to export yet.');
+      _snack('No products in this store to export yet.');
+      return;
+    }
+    final options = await showReportOptionsDialog(context);
+    if (options == null) return;
+    final filtered = options.apply(_products);
+    if (filtered.isEmpty) {
+      _snack('No products match the selected dates.');
       return;
     }
     try {
-      await ExportService.instance.shareExcelReport(_products);
+      await ExportService.instance.shareExcelReport(
+        filtered,
+        storeName: _currentStore?.name ?? 'Store',
+        options: options,
+      );
     } catch (e) {
       _snack('Export failed: $e');
     }
@@ -126,7 +169,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Expiry Check'),
+        title: _buildStoreSelector(),
         actions: [
           IconButton(
             tooltip: 'Excel report',
@@ -194,18 +237,55 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Widget _buildStoreSelector() {
+    if (_stores.isEmpty) return const Text('Expiry Check');
+    final onPrimary = Theme.of(context).colorScheme.onPrimary;
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<int>(
+        value: _storeId,
+        isDense: true,
+        dropdownColor: Theme.of(context).colorScheme.primary,
+        iconEnabledColor: onPrimary,
+        style: TextStyle(
+          color: onPrimary,
+          fontSize: 20,
+          fontWeight: FontWeight.w500,
+        ),
+        items: _stores
+            .map((s) => DropdownMenuItem(
+                  value: s.id,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.store, size: 18, color: onPrimary),
+                      const SizedBox(width: 8),
+                      Text(s.name),
+                    ],
+                  ),
+                ))
+            .toList(),
+        onChanged: (v) {
+          if (v != null && v != _storeId) _switchStore(v);
+        },
+      ),
+    );
+  }
+
   Widget _buildSummaryBar() {
     final expired = _products.where((p) => p.isExpired).length;
-    final soon = _products.where((p) => p.isExpiringSoon).length;
-    final fresh = _products.length - expired - soon;
+    final soon30 = _products.where((p) => p.isExpiringSoon).length;
+    final soon90 = _products.where((p) => p.isExpiring90).length;
+    final fresh = _products.length - expired - soon30 - soon90;
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: Row(
         children: [
           _summaryChip('Expired', expired, Colors.red, _Filter.expired),
-          const SizedBox(width: 8),
-          _summaryChip('≤ 30 days', soon, Colors.orange, _Filter.expiringSoon),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
+          _summaryChip('≤30 days', soon30, Colors.orange, _Filter.soon30),
+          const SizedBox(width: 6),
+          _summaryChip('≤90 days', soon90, Colors.amber, _Filter.soon90),
+          const SizedBox(width: 6),
           _summaryChip('Fresh', fresh, Colors.green, _Filter.fresh),
         ],
       ),
@@ -266,7 +346,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 12),
           Text(
             _products.isEmpty
-                ? 'No products yet.\nTap "Scan product" to add your first item.'
+                ? 'No products in ${_currentStore?.name ?? 'this store'} yet.\nTap "Scan product" to add your first item.'
                 : 'Nothing matches this filter.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey.shade600),
@@ -281,10 +361,15 @@ class _HomeScreenState extends State<HomeScreen> {
         ? Colors.red
         : product.isExpiringSoon
             ? Colors.orange
-            : Colors.green;
-    final dateFmt = DateFormat('d MMM yyyy');
+            : product.isExpiring90
+                ? Colors.amber
+                : Colors.green;
+    final dateFmt = DateFormat('dd/MM/yyyy');
+    // Brand first, then product name, matching the form and report order.
+    final title = product.brand.isNotEmpty
+        ? '${product.brand} — ${product.name}'
+        : product.name;
     final subtitleParts = <String>[
-      if (product.brand.isNotEmpty) product.brand,
       if (product.batch.isNotEmpty) 'Batch ${product.batch}',
       'Qty ${product.quantity}',
     ];
@@ -324,13 +409,13 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Icon(
               product.isExpired
                   ? Icons.error_outline
-                  : product.isExpiringSoon
+                  : (product.isExpiringSoon || product.isExpiring90)
                       ? Icons.schedule
                       : Icons.check_circle_outline,
               color: color,
             ),
           ),
-          title: Text(product.name,
+          title: Text(title,
               style: const TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Text(
             '${subtitleParts.join(' • ')}\n'
