@@ -2,6 +2,7 @@ import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../models/product.dart';
+import '../models/store.dart';
 
 /// Local-first SQLite storage. Keeping data on-device is free (no server
 /// costs); users can back up/restore via the exported JSON/Excel files in
@@ -11,7 +12,11 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._();
 
   static const _dbName = 'expiry_check.db';
+  static const _dbVersion = 2;
   static const _table = 'products';
+  static const _storesTable = 'stores';
+
+  static const defaultStoreNames = ['Main Store', 'Branch 2', 'Branch 3'];
 
   Database? _db;
 
@@ -24,11 +29,12 @@ class DatabaseService {
     final dir = await getDatabasesPath();
     return openDatabase(
       join(dir, _dbName),
-      version: 1,
+      version: _dbVersion,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE $_table (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            storeId INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
             brand TEXT NOT NULL DEFAULT '',
             batch TEXT NOT NULL DEFAULT '',
@@ -39,9 +45,49 @@ class DatabaseService {
             notes TEXT NOT NULL DEFAULT ''
           )
         ''');
+        await _createStoresTable(db);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+              'ALTER TABLE $_table ADD COLUMN storeId INTEGER NOT NULL DEFAULT 1');
+          await _createStoresTable(db);
+        }
       },
     );
   }
+
+  Future<void> _createStoresTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE $_storesTable (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL
+      )
+    ''');
+    for (final name in defaultStoreNames) {
+      await db.insert(_storesTable, {'name': name});
+    }
+  }
+
+  // ---- Stores ----
+
+  Future<List<Store>> getStores() async {
+    final db = await database;
+    final rows = await db.query(_storesTable, orderBy: 'id ASC');
+    return rows.map(Store.fromMap).toList();
+  }
+
+  Future<void> renameStore(int id, String name) async {
+    final db = await database;
+    await db.update(
+      _storesTable,
+      {'name': name},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+  }
+
+  // ---- Products ----
 
   Future<Product> insert(Product product) async {
     final db = await database;
@@ -65,9 +111,15 @@ class DatabaseService {
     await db.delete(_table, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<List<Product>> getAll() async {
+  /// All products, or only one branch's inventory when [storeId] is given.
+  Future<List<Product>> getAll({int? storeId}) async {
     final db = await database;
-    final rows = await db.query(_table, orderBy: 'expiryDate ASC');
+    final rows = await db.query(
+      _table,
+      where: storeId != null ? 'storeId = ?' : null,
+      whereArgs: storeId != null ? [storeId] : null,
+      orderBy: 'expiryDate ASC',
+    );
     return rows.map(Product.fromMap).toList();
   }
 
@@ -76,12 +128,24 @@ class DatabaseService {
     return all.where((p) => p.daysLeft <= days).toList();
   }
 
-  Future<void> replaceAll(List<Product> products) async {
+  /// Replaces the whole inventory (used by backup restore). When [stores]
+  /// is provided, matching store ids are renamed to the backed-up names.
+  Future<void> replaceAll(List<Product> products, {List<Store>? stores}) async {
     final db = await database;
     await db.transaction((txn) async {
       await txn.delete(_table);
       for (final p in products) {
         await txn.insert(_table, p.toMap()..remove('id'));
+      }
+      if (stores != null) {
+        for (final s in stores) {
+          await txn.update(
+            _storesTable,
+            {'name': s.name},
+            where: 'id = ?',
+            whereArgs: [s.id],
+          );
+        }
       }
     });
   }

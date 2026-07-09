@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/product.dart';
+import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
@@ -21,11 +23,18 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const _storePrefKey = 'selected_store_id';
+
   List<Product> _products = [];
+  List<Store> _stores = [];
+  int _storeId = 1;
   bool _loading = true;
   bool _scanning = false;
   _Filter _filter = _Filter.all;
   String _search = '';
+
+  Store? get _currentStore =>
+      _stores.where((s) => s.id == _storeId).firstOrNull;
 
   @override
   void initState() {
@@ -35,12 +44,27 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _load() async {
-    final products = await DatabaseService.instance.getAll();
+    final stores = await DatabaseService.instance.getStores();
+    final prefs = await SharedPreferences.getInstance();
+    var storeId = prefs.getInt(_storePrefKey) ?? _storeId;
+    if (!stores.any((s) => s.id == storeId) && stores.isNotEmpty) {
+      storeId = stores.first.id;
+    }
+    final products = await DatabaseService.instance.getAll(storeId: storeId);
     if (!mounted) return;
     setState(() {
+      _stores = stores;
+      _storeId = storeId;
       _products = products;
       _loading = false;
     });
+  }
+
+  Future<void> _switchStore(int storeId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_storePrefKey, storeId);
+    setState(() => _storeId = storeId);
+    await _load();
   }
 
   List<Product> get _visible {
@@ -89,8 +113,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _openForm({Product? product, OcrParseResult? scanResult}) async {
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) =>
-            ProductFormScreen(product: product, scanResult: scanResult),
+        builder: (_) => ProductFormScreen(
+          product: product,
+          scanResult: scanResult,
+          storeId: _storeId,
+        ),
       ),
     );
     if (changed == true) _load();
@@ -105,11 +132,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _exportExcel() async {
     if (_products.isEmpty) {
-      _snack('No products to export yet.');
+      _snack('No products in this store to export yet.');
       return;
     }
     try {
-      await ExportService.instance.shareExcelReport(_products);
+      await ExportService.instance.shareExcelReport(
+        _products,
+        storeName: _currentStore?.name ?? 'Store',
+      );
     } catch (e) {
       _snack('Export failed: $e');
     }
@@ -126,7 +156,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Expiry Check'),
+        title: _buildStoreSelector(),
         actions: [
           IconButton(
             tooltip: 'Excel report',
@@ -190,6 +220,40 @@ class _HomeScreenState extends State<HomeScreen> {
             label: Text(_scanning ? 'Scanning…' : 'Scan product'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildStoreSelector() {
+    if (_stores.isEmpty) return const Text('Expiry Check');
+    final onPrimary = Theme.of(context).colorScheme.onPrimary;
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<int>(
+        value: _storeId,
+        isDense: true,
+        dropdownColor: Theme.of(context).colorScheme.primary,
+        iconEnabledColor: onPrimary,
+        style: TextStyle(
+          color: onPrimary,
+          fontSize: 20,
+          fontWeight: FontWeight.w500,
+        ),
+        items: _stores
+            .map((s) => DropdownMenuItem(
+                  value: s.id,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.store, size: 18, color: onPrimary),
+                      const SizedBox(width: 8),
+                      Text(s.name),
+                    ],
+                  ),
+                ))
+            .toList(),
+        onChanged: (v) {
+          if (v != null && v != _storeId) _switchStore(v);
+        },
       ),
     );
   }
@@ -266,7 +330,7 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 12),
           Text(
             _products.isEmpty
-                ? 'No products yet.\nTap "Scan product" to add your first item.'
+                ? 'No products in ${_currentStore?.name ?? 'this store'} yet.\nTap "Scan product" to add your first item.'
                 : 'Nothing matches this filter.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey.shade600),

@@ -10,6 +10,7 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
   - brand name and product/flavour name combined with strength (e.g. "BERRY LEMON 11.4 mg/mL")
   - category guess (e.g. "NICOTINE SALT E-LIQUID" → Salt Liquids)
 - **Inventory tracking** — name, brand, batch, category, quantity, notes; color-coded status (expired / expiring ≤ 30 days / fresh), search and filters. Categories: Shisha Flavours, Salt Liquids, Free Base Liquids, Detox Products, Prefilled Vape Pods, Prefilled Kits. Dates are shown and typed in NZ format (dd/mm/yyyy).
+- **Store branches** — three branches with editable names (Settings → Store branches). Each branch keeps its own inventory: switch branches from the dropdown in the app bar, and products/scans are saved to the selected branch. Excel reports are generated per branch, and expiry reminders mention the branch name.
 - **Notifications**
   - weekly digest on a day/time you choose (default Monday 09:00)
   - per-product alert N days before expiry (3/7/14/30, default 7) and on expiry day

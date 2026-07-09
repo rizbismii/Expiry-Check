@@ -42,10 +42,11 @@ void main() {
     test('round-trips through map', () {
       final p = Product(
         id: 7,
+        storeId: 2,
         name: 'Shampoo',
         brand: 'CleanCo',
         batch: 'LOT99',
-        category: 'Cosmetics',
+        category: 'Salt Liquids',
         quantity: 3,
         expiryDate: DateTime(2027, 3, 15),
         addedDate: DateTime(2026, 7, 1),
@@ -53,13 +54,24 @@ void main() {
       );
       final restored = Product.fromMap(p.toMap());
       expect(restored.id, 7);
+      expect(restored.storeId, 2);
       expect(restored.name, 'Shampoo');
       expect(restored.brand, 'CleanCo');
       expect(restored.batch, 'LOT99');
-      expect(restored.category, 'Cosmetics');
+      expect(restored.category, 'Salt Liquids');
       expect(restored.quantity, 3);
       expect(restored.expiryDate, DateTime(2027, 3, 15));
       expect(restored.notes, 'bathroom shelf');
+    });
+
+    test('storeId defaults to 1 for legacy maps', () {
+      final map = Product(
+        name: 'Old item',
+        expiryDate: DateTime(2027, 1, 1),
+        addedDate: DateTime(2026, 1, 1),
+      ).toMap()
+        ..remove('storeId');
+      expect(Product.fromMap(map).storeId, 1);
     });
   });
 }

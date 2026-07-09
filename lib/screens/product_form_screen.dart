@@ -3,6 +3,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../models/product.dart';
+import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import '../services/ocr_service.dart';
@@ -12,7 +13,16 @@ class ProductFormScreen extends StatefulWidget {
   final Product? product;
   final OcrParseResult? scanResult;
 
-  const ProductFormScreen({super.key, this.product, this.scanResult});
+  /// Store the product belongs to (for new products, the branch currently
+  /// selected on the home screen).
+  final int storeId;
+
+  const ProductFormScreen({
+    super.key,
+    this.product,
+    this.scanResult,
+    this.storeId = 1,
+  });
 
   @override
   State<ProductFormScreen> createState() => _ProductFormScreenState();
@@ -29,6 +39,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   late final TextEditingController _notesCtrl;
   late String _category;
   late int _quantity;
+  late int _storeId;
+  List<Store> _stores = [];
   bool _saving = false;
   bool _rescanning = false;
   String? _scannedText;
@@ -40,6 +52,10 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     super.initState();
     final p = widget.product;
     final scan = widget.scanResult;
+    _storeId = p?.storeId ?? widget.storeId;
+    DatabaseService.instance.getStores().then((stores) {
+      if (mounted) setState(() => _stores = stores);
+    });
     _nameCtrl =
         TextEditingController(text: p?.name ?? scan?.productName ?? '');
     _brandCtrl =
@@ -132,6 +148,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     try {
       final product = Product(
         id: widget.product?.id,
+        storeId: _storeId,
         name: _nameCtrl.text.trim(),
         brand: _brandCtrl.text.trim(),
         batch: _batchCtrl.text.trim(),
@@ -207,6 +224,23 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 ),
               ),
               const SizedBox(height: 16),
+            ],
+            if (_stores.isNotEmpty) ...[
+              DropdownButtonFormField<int>(
+                value: _stores.any((s) => s.id == _storeId)
+                    ? _storeId
+                    : _stores.first.id,
+                decoration: const InputDecoration(
+                  labelText: 'Store branch',
+                  prefixIcon: Icon(Icons.store),
+                ),
+                items: _stores
+                    .map((s) =>
+                        DropdownMenuItem(value: s.id, child: Text(s.name)))
+                    .toList(),
+                onChanged: (v) => setState(() => _storeId = v ?? _storeId),
+              ),
+              const SizedBox(height: 12),
             ],
             TextFormField(
               controller: _nameCtrl,

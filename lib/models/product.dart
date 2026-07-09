@@ -1,5 +1,6 @@
 class Product {
   final int? id;
+  final int storeId;
   final String name;
   final String brand;
   final String batch;
@@ -11,6 +12,7 @@ class Product {
 
   const Product({
     this.id,
+    this.storeId = 1,
     required this.name,
     this.brand = '',
     this.batch = '',
@@ -42,6 +44,7 @@ class Product {
 
   Product copyWith({
     int? id,
+    int? storeId,
     String? name,
     String? brand,
     String? batch,
@@ -53,6 +56,7 @@ class Product {
   }) {
     return Product(
       id: id ?? this.id,
+      storeId: storeId ?? this.storeId,
       name: name ?? this.name,
       brand: brand ?? this.brand,
       batch: batch ?? this.batch,
@@ -67,6 +71,7 @@ class Product {
   Map<String, dynamic> toMap() {
     return {
       'id': id,
+      'storeId': storeId,
       'name': name,
       'brand': brand,
       'batch': batch,
@@ -81,6 +86,7 @@ class Product {
   factory Product.fromMap(Map<String, dynamic> map) {
     return Product(
       id: map['id'] as int?,
+      storeId: map['storeId'] as int? ?? 1,
       name: map['name'] as String? ?? '',
       brand: map['brand'] as String? ?? '',
       batch: map['batch'] as String? ?? '',
