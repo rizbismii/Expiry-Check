@@ -18,7 +18,10 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
 - **Excel reports** — choose the report basis (expiry date or added date) and an optional dd/mm/yyyy date range, then export an `.xlsx` with the inventory (brand, product, expiry, batch, category, quantity, days left, status) plus a summary sheet, shared via the system share sheet (email, WhatsApp, Drive…).
 - **Duplicate merging** — adding a product with the same brand, name, batch and expiry as an existing entry in the same store (ignoring case and spacing) prompts to increase its quantity instead of creating a duplicate row.
 - **Voice input** — every form field has a microphone button for dictation (on-device speech recognition); spoken dates like "12 May 2028" fill the expiry field in dd/mm/yyyy.
-- **Weekly dashboard notification** — the weekly notification shows total units plus expired / ≤30 days / ≤90 days / fresh unit counts, with a per-branch breakdown when multiple stores hold stock.
+- **Stock dashboard notifications** — weekly or monthly (configurable day and time), showing total units plus Expired / ≤30days / ≤90days / Fresh unit counts, with a per-branch breakdown when multiple stores hold stock.
+- **Sign-in with email passcode** — username + email verified with a one-time passcode; the username appears in the app, is stamped on entries as "Created By" (shown in Excel), and is recorded in the deletion log. No backend needed — the passcode goes through the user's own email app.
+- **Deletion audit** — swiping a row to delete requires a reason/note; deletions are logged and exported as a "Deletion Log" sheet in Excel reports.
+- **Duplicate cleanup** — Settings → "Clean up duplicate rows" merges existing duplicates (same brand/product/batch/expiry ignoring case, spacing and punctuation) by combining quantities.
 - **Backup & restore** — export a JSON backup and keep it wherever you like; restore it on any device.
 
 ## Storage: local-first (the cost-effective choice)

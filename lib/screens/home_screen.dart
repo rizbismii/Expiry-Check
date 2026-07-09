@@ -9,8 +9,10 @@ import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
 import '../services/ocr_service.dart';
+import '../services/user_service.dart';
 import '../utils/date_parser.dart';
 import '../widgets/report_options_dialog.dart';
+import 'login_screen.dart';
 import 'product_form_screen.dart';
 import 'settings_screen.dart';
 
@@ -37,11 +39,27 @@ class _HomeScreenState extends State<HomeScreen> {
   Store? get _currentStore =>
       _stores.where((s) => s.id == _storeId).firstOrNull;
 
+  String _username = '';
+  final _pendingDeleteNotes = <int, String>{};
+
   @override
   void initState() {
     super.initState();
-    _load();
+    _ensureSignedIn().then((_) => _load());
     NotificationService.instance.requestPermissions();
+  }
+
+  Future<void> _ensureSignedIn() async {
+    final name = await UserService.instance.username;
+    if (name != null) {
+      _username = name;
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    _username = await UserService.instance.username ?? '';
   }
 
   Future<void> _load() async {
@@ -128,11 +146,64 @@ class _HomeScreenState extends State<HomeScreen> {
     if (changed == true) _load();
   }
 
-  Future<void> _delete(Product product) async {
+  /// Asks for a mandatory reason/note before deleting. Returns the note, or
+  /// null when cancelled.
+  Future<String?> _askDeleteNote(Product product) async {
+    final controller = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    final note = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete product?'),
+        content: Form(
+          key: formKey,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Remove "${product.name}" (qty ${product.quantity}) '
+                  'from this store?'),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: controller,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Reason / note *',
+                  hintText: 'e.g. sold out, damaged, expired stock removed',
+                ),
+                maxLines: 2,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'A note is required before deleting'
+                    : null,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (formKey.currentState!.validate()) {
+                Navigator.pop(context, controller.text.trim());
+              }
+            },
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    return note;
+  }
+
+  Future<void> _delete(Product product, String note) async {
+    await DatabaseService.instance
+        .logDeletion(product, note: note, deletedBy: _username);
     await DatabaseService.instance.delete(product.id!);
     await NotificationService.instance.rescheduleAll();
     _load();
-    _snack('${product.name} deleted');
+    _snack('${product.name} deleted — note saved to the deletion log.');
   }
 
   Future<void> _exportExcel() async {
@@ -148,10 +219,14 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     try {
+      final deletionLog =
+          await DatabaseService.instance.getDeletionLog(storeId: _storeId);
       await ExportService.instance.shareExcelReport(
         filtered,
         storeName: _currentStore?.name ?? 'Store',
         options: options,
+        deletionLog: deletionLog,
+        generatedBy: _username,
       );
     } catch (e) {
       _snack('Export failed: $e');
@@ -383,24 +458,13 @@ class _HomeScreenState extends State<HomeScreen> {
         child: const Icon(Icons.delete, color: Colors.white),
       ),
       confirmDismiss: (_) async {
-        return await showDialog<bool>(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Delete product?'),
-                content: Text('Remove "${product.name}" from your inventory?'),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Delete')),
-                ],
-              ),
-            ) ??
-            false;
+        final note = await _askDeleteNote(product);
+        if (note == null) return false;
+        _pendingDeleteNotes[product.id!] = note;
+        return true;
       },
-      onDismissed: (_) => _delete(product),
+      onDismissed: (_) =>
+          _delete(product, _pendingDeleteNotes.remove(product.id!) ?? ''),
       child: Card(
         child: ListTile(
           onTap: () => _openForm(product: product),

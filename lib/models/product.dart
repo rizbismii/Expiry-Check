@@ -9,6 +9,7 @@ class Product {
   final DateTime expiryDate;
   final DateTime addedDate;
   final String notes;
+  final String createdBy;
 
   const Product({
     this.id,
@@ -21,6 +22,7 @@ class Product {
     required this.expiryDate,
     required this.addedDate,
     this.notes = '',
+    this.createdBy = '',
   });
 
   int get daysLeft {
@@ -57,6 +59,7 @@ class Product {
     DateTime? expiryDate,
     DateTime? addedDate,
     String? notes,
+    String? createdBy,
   }) {
     return Product(
       id: id ?? this.id,
@@ -69,6 +72,7 @@ class Product {
       expiryDate: expiryDate ?? this.expiryDate,
       addedDate: addedDate ?? this.addedDate,
       notes: notes ?? this.notes,
+      createdBy: createdBy ?? this.createdBy,
     );
   }
 
@@ -84,6 +88,7 @@ class Product {
       'expiryDate': expiryDate.toIso8601String(),
       'addedDate': addedDate.toIso8601String(),
       'notes': notes,
+      'createdBy': createdBy,
     };
   }
 
@@ -99,6 +104,7 @@ class Product {
       expiryDate: DateTime.parse(map['expiryDate'] as String),
       addedDate: DateTime.parse(map['addedDate'] as String),
       notes: map['notes'] as String? ?? '',
+      createdBy: map['createdBy'] as String? ?? '',
     );
   }
 

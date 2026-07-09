@@ -19,6 +19,10 @@ class NotificationService {
   static const _weekdayKey = 'weekly_digest_weekday';
   static const _hourKey = 'weekly_digest_hour';
   static const _leadDaysKey = 'reminder_lead_days';
+  static const _frequencyKey = 'digest_frequency';
+  static const _dayOfMonthKey = 'digest_day_of_month';
+
+  static const leadDayOptions = [3, 7, 14, 30, 60, 90];
 
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
@@ -82,15 +86,31 @@ class NotificationService {
     return prefs.getInt(_leadDaysKey) ?? 7;
   }
 
+  /// 'weekly' (default) or 'monthly'.
+  Future<String> getFrequency() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_frequencyKey) ?? 'weekly';
+  }
+
+  /// Day of month (1–28) for monthly digests.
+  Future<int> getDayOfMonth() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_dayOfMonthKey) ?? 1;
+  }
+
   Future<void> saveSettings({
     required int weekday,
     required int hour,
     required int leadDays,
+    String frequency = 'weekly',
+    int dayOfMonth = 1,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_weekdayKey, weekday);
     await prefs.setInt(_hourKey, hour);
     await prefs.setInt(_leadDaysKey, leadDays);
+    await prefs.setString(_frequencyKey, frequency);
+    await prefs.setInt(_dayOfMonthKey, dayOfMonth.clamp(1, 28));
     await rescheduleAll();
   }
 
@@ -141,21 +161,36 @@ class NotificationService {
       List<Product> products, List<Store> stores) async {
     final weekday = await getWeeklyWeekday();
     final hour = await getWeeklyHour();
+    final frequency = await getFrequency();
+    final dayOfMonth = await getDayOfMonth();
 
     final now = tz.TZDateTime.now(tz.local);
-    var next = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour);
-    while (next.weekday != weekday || !next.isAfter(now)) {
-      next = next.add(const Duration(days: 1));
+    tz.TZDateTime next;
+    DateTimeComponents repeat;
+    if (frequency == 'monthly') {
+      next = tz.TZDateTime(tz.local, now.year, now.month, dayOfMonth, hour);
+      while (!next.isAfter(now)) {
+        next = tz.TZDateTime(tz.local, next.year, next.month + 1, dayOfMonth, hour);
+      }
+      repeat = DateTimeComponents.dayOfMonthAndTime;
+    } else {
+      next = tz.TZDateTime(tz.local, now.year, now.month, now.day, hour);
+      while (next.weekday != weekday || !next.isAfter(now)) {
+        next = next.add(const Duration(days: 1));
+      }
+      repeat = DateTimeComponents.dayOfWeekAndTime;
     }
 
     final body = buildDashboardBody(products, stores);
     await _zonedSchedule(
       id: _weeklyDigestId,
-      title: 'Weekly stock dashboard',
+      title: frequency == 'monthly'
+          ? 'Monthly stock dashboard'
+          : 'Weekly stock dashboard',
       body: body,
       when: next,
       details: _digestDetails(body),
-      matchDateTimeComponents: DateTimeComponents.dayOfWeekAndTime,
+      matchDateTimeComponents: repeat,
     );
   }
 
@@ -173,7 +208,7 @@ class NotificationService {
       final soon30 = units(ps.where((p) => p.isExpiringSoon));
       final soon90 = units(ps.where((p) => p.isExpiring90));
       final fresh = units(ps) - expired - soon30 - soon90;
-      return 'Expired $expired • ≤30d $soon30 • ≤90d $soon90 • Fresh $fresh';
+      return 'Expired $expired • ≤30days $soon30 • ≤90days $soon90 • Fresh $fresh';
     }
 
     final lines = <String>[

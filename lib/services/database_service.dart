@@ -4,6 +4,43 @@ import 'package:sqflite/sqflite.dart';
 import '../models/product.dart';
 import '../models/store.dart';
 
+/// Audit record kept when a product row is deleted via swipe.
+class DeletionEntry {
+  final DateTime deletedAt;
+  final String deletedBy;
+  final String note;
+  final int storeId;
+  final String name;
+  final String brand;
+  final String batch;
+  final DateTime expiryDate;
+  final int quantity;
+
+  const DeletionEntry({
+    required this.deletedAt,
+    this.deletedBy = '',
+    this.note = '',
+    this.storeId = 1,
+    required this.name,
+    this.brand = '',
+    this.batch = '',
+    required this.expiryDate,
+    this.quantity = 1,
+  });
+
+  factory DeletionEntry.fromMap(Map<String, dynamic> map) => DeletionEntry(
+        deletedAt: DateTime.parse(map['deletedAt'] as String),
+        deletedBy: map['deletedBy'] as String? ?? '',
+        note: map['note'] as String? ?? '',
+        storeId: map['storeId'] as int? ?? 1,
+        name: map['name'] as String? ?? '',
+        brand: map['brand'] as String? ?? '',
+        batch: map['batch'] as String? ?? '',
+        expiryDate: DateTime.parse(map['expiryDate'] as String),
+        quantity: map['quantity'] as int? ?? 1,
+      );
+}
+
 /// Local-first SQLite storage. Keeping data on-device is free (no server
 /// costs); users can back up/restore via the exported JSON/Excel files in
 /// Settings, using any cloud drive they already have (Google Drive, iCloud).
@@ -12,9 +49,10 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._();
 
   static const _dbName = 'expiry_check.db';
-  static const _dbVersion = 2;
+  static const _dbVersion = 3;
   static const _table = 'products';
   static const _storesTable = 'stores';
+  static const _deletionsTable = 'deletion_log';
 
   static const defaultStoreNames = ['Main Store', 'Branch 2', 'Branch 3'];
 
@@ -42,10 +80,12 @@ class DatabaseService {
             quantity INTEGER NOT NULL DEFAULT 1,
             expiryDate TEXT NOT NULL,
             addedDate TEXT NOT NULL,
-            notes TEXT NOT NULL DEFAULT ''
+            notes TEXT NOT NULL DEFAULT '',
+            createdBy TEXT NOT NULL DEFAULT ''
           )
         ''');
         await _createStoresTable(db);
+        await _createDeletionsTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -53,8 +93,30 @@ class DatabaseService {
               'ALTER TABLE $_table ADD COLUMN storeId INTEGER NOT NULL DEFAULT 1');
           await _createStoresTable(db);
         }
+        if (oldVersion < 3) {
+          await db.execute(
+              "ALTER TABLE $_table ADD COLUMN createdBy TEXT NOT NULL DEFAULT ''");
+          await _createDeletionsTable(db);
+        }
       },
     );
+  }
+
+  Future<void> _createDeletionsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE $_deletionsTable (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deletedAt TEXT NOT NULL,
+        deletedBy TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        storeId INTEGER NOT NULL DEFAULT 1,
+        name TEXT NOT NULL,
+        brand TEXT NOT NULL DEFAULT '',
+        batch TEXT NOT NULL DEFAULT '',
+        expiryDate TEXT NOT NULL,
+        quantity INTEGER NOT NULL DEFAULT 1
+      )
+    ''');
   }
 
   Future<void> _createStoresTable(Database db) async {
@@ -123,13 +185,22 @@ class DatabaseService {
     return rows.map(Product.fromMap).toList();
   }
 
-  /// Normalization used for duplicate detection: case-insensitive, ignores
-  /// leading/trailing/repeated whitespace (OCR and typing often differ there).
+  /// Normalization used for duplicate detection: lowercase with everything
+  /// except letters and digits stripped, so "ALY32 260513", "a l y 32260513"
+  /// and "Al y 32 260513" (typical OCR/voice spacing noise) all match.
   static String normalizeForMatch(String value) =>
-      value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+      value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
 
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
+
+  static String _duplicateKey(Product p) => [
+        p.storeId,
+        normalizeForMatch(p.name),
+        normalizeForMatch(p.brand),
+        normalizeForMatch(p.batch),
+        '${p.expiryDate.year}-${p.expiryDate.month}-${p.expiryDate.day}',
+      ].join('|');
 
   /// Finds an existing product in the same store with the same brand, name,
   /// batch and expiry date, used to merge duplicates by increasing quantity
@@ -155,6 +226,59 @@ class DatabaseService {
   Future<List<Product>> getExpiringWithin(int days) async {
     final all = await getAll();
     return all.where((p) => p.daysLeft <= days).toList();
+  }
+
+  /// Merges rows that are duplicates of each other (same store, brand, name,
+  /// batch and expiry day after normalization) by summing quantities.
+  /// Returns the number of rows removed.
+  Future<int> mergeDuplicates() async {
+    final all = await getAll();
+    final byKey = <String, Product>{};
+    var removed = 0;
+    for (final p in all) {
+      final key = _duplicateKey(p);
+      final existing = byKey[key];
+      if (existing == null) {
+        byKey[key] = p;
+      } else {
+        final merged =
+            existing.copyWith(quantity: existing.quantity + p.quantity);
+        await update(merged);
+        await delete(p.id!);
+        byKey[key] = merged;
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  // ---- Deletion log ----
+
+  Future<void> logDeletion(Product p,
+      {required String note, required String deletedBy}) async {
+    final db = await database;
+    await db.insert(_deletionsTable, {
+      'deletedAt': DateTime.now().toIso8601String(),
+      'deletedBy': deletedBy,
+      'note': note,
+      'storeId': p.storeId,
+      'name': p.name,
+      'brand': p.brand,
+      'batch': p.batch,
+      'expiryDate': p.expiryDate.toIso8601String(),
+      'quantity': p.quantity,
+    });
+  }
+
+  Future<List<DeletionEntry>> getDeletionLog({int? storeId}) async {
+    final db = await database;
+    final rows = await db.query(
+      _deletionsTable,
+      where: storeId != null ? 'storeId = ?' : null,
+      whereArgs: storeId != null ? [storeId] : null,
+      orderBy: 'deletedAt DESC',
+    );
+    return rows.map(DeletionEntry.fromMap).toList();
   }
 
   /// Replaces the whole inventory (used by backup restore). When [stores]

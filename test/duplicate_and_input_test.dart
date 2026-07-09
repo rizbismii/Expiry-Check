@@ -17,6 +17,19 @@ void main() {
           DatabaseService.normalizeForMatch('Berry Lemon'));
     });
 
+    test('ignores arbitrary spacing inside batch codes (OCR/voice noise)', () {
+      // Real case from device testing: same batch scanned three ways.
+      expect(DatabaseService.normalizeForMatch('a l y 32260513'),
+          DatabaseService.normalizeForMatch('ALY32 260513'));
+      expect(DatabaseService.normalizeForMatch('Al y 32 260513'),
+          DatabaseService.normalizeForMatch('ALY32 260513'));
+    });
+
+    test('ignores punctuation differences', () {
+      expect(DatabaseService.normalizeForMatch('K-2201/A'),
+          DatabaseService.normalizeForMatch('K2201A'));
+    });
+
     test('different batches stay different', () {
       expect(
           DatabaseService.normalizeForMatch('ALY32 260513') ==
@@ -70,7 +83,7 @@ void main() {
         make(1, 7, 200), // fresh
       ], stores);
       expect(body, contains('Total stock: 17 units (4 products)'));
-      expect(body, contains('Expired 5 • ≤30d 3 • ≤90d 2 • Fresh 7'));
+      expect(body, contains('Expired 5 • ≤30days 3 • ≤90days 2 • Fresh 7'));
       // Single branch: no per-store breakdown.
       expect(body.contains('Queen Street'), isFalse);
     });

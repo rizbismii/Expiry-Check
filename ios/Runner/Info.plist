@@ -49,6 +49,10 @@
 	<string>Expiry Check uses the microphone so you can dictate product details instead of typing.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Expiry Check converts your speech to text to fill in product fields.</string>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>mailto</string>
+	</array>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

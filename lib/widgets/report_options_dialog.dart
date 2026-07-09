@@ -28,7 +28,7 @@ class _ReportOptionsDialogState extends State<_ReportOptionsDialog> {
   final _formKey = GlobalKey<FormState>();
   final _fromCtrl = TextEditingController();
   final _toCtrl = TextEditingController();
-  ReportBasis _basis = ReportBasis.expiryDate;
+  ReportBasis _basis = ReportBasis.all;
 
   @override
   void dispose() {
@@ -60,6 +60,10 @@ class _ReportOptionsDialogState extends State<_ReportOptionsDialog> {
   }
 
   void _submit() {
+    if (_basis == ReportBasis.all) {
+      Navigator.pop(context, const ReportOptions(basis: ReportBasis.all));
+      return;
+    }
     if (!_formKey.currentState!.validate()) return;
     final from = DateParser.parseTypedDate(_fromCtrl.text);
     final to = DateParser.parseTypedDate(_toCtrl.text);
@@ -102,6 +106,14 @@ class _ReportOptionsDialogState extends State<_ReportOptionsDialog> {
             children: [
               const Text('Report based on'),
               RadioListTile<ReportBasis>(
+                value: ReportBasis.all,
+                groupValue: _basis,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('All (entire inventory)'),
+                onChanged: (v) => setState(() => _basis = v!),
+              ),
+              RadioListTile<ReportBasis>(
                 value: ReportBasis.expiryDate,
                 groupValue: _basis,
                 dense: true,
@@ -117,12 +129,14 @@ class _ReportOptionsDialogState extends State<_ReportOptionsDialog> {
                 title: const Text('Added date'),
                 onChanged: (v) => setState(() => _basis = v!),
               ),
-              const SizedBox(height: 8),
-              const Text('Date range (optional — leave blank for all)'),
-              const SizedBox(height: 8),
-              _dateField(_fromCtrl, 'From'),
-              const SizedBox(height: 12),
-              _dateField(_toCtrl, 'To'),
+              if (_basis != ReportBasis.all) ...[
+                const SizedBox(height: 8),
+                const Text('Date range (optional — leave blank for all)'),
+                const SizedBox(height: 8),
+                _dateField(_fromCtrl, 'From'),
+                const SizedBox(height: 12),
+                _dateField(_toCtrl, 'To'),
+              ],
             ],
           ),
         ),

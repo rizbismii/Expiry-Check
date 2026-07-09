@@ -4,6 +4,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
+import '../services/user_service.dart';
+
 import '../models/product.dart';
 import '../models/store.dart';
 import '../services/database_service.dart';
@@ -51,6 +53,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   final SpeechToText _speech = SpeechToText();
   bool _speechReady = false;
   String? _listeningField;
+  String _username = '';
 
   bool get _isEdit => widget.product != null;
 
@@ -62,6 +65,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _storeId = p?.storeId ?? widget.storeId;
     DatabaseService.instance.getStores().then((stores) {
       if (mounted) setState(() => _stores = stores);
+    });
+    UserService.instance.username.then((name) {
+      if (mounted && name != null) _username = name;
     });
     _nameCtrl =
         TextEditingController(text: p?.name ?? scan?.productName ?? '');
@@ -100,51 +106,71 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   // ---- Voice input ----
 
   /// Starts (or stops) dictation into [controller]. For the expiry field a
-  /// spoken date like "12 May 2028" is converted to dd/mm/yyyy.
+  /// spoken date like "12 May 2028" or "19022027" is converted to dd/mm/yyyy.
   Future<void> _dictate(String fieldKey, TextEditingController controller,
       {bool isDate = false, bool isNumber = false}) async {
+    // Tapping the mic of another field while listening: restart there.
+    final wasListeningHere = _listeningField == fieldKey;
     if (_speech.isListening) {
       await _speech.stop();
-      setState(() => _listeningField = null);
-      return;
+      if (mounted) setState(() => _listeningField = null);
+      if (wasListeningHere) return;
     }
     if (!_speechReady) {
+      // Not cached on failure so a denied permission can be retried after
+      // the user grants it in system settings.
       _speechReady = await _speech.initialize(
         onStatus: (status) {
           if (status == 'done' || status == 'notListening') {
             if (mounted) setState(() => _listeningField = null);
           }
         },
-        onError: (_) {
-          if (mounted) setState(() => _listeningField = null);
+        onError: (error) {
+          if (!mounted) return;
+          setState(() => _listeningField = null);
+          if (error.permanent) {
+            _snack('Voice input error: ${error.errorMsg}. '
+                'Check the microphone permission in system settings.');
+          }
         },
       );
       if (!_speechReady) {
-        _snack('Speech recognition is not available on this device. '
-            'Check the microphone permission.');
+        _snack('Speech recognition is not available. Allow the microphone '
+            'permission and make sure Google/Samsung voice input is enabled.');
         return;
       }
     }
     setState(() => _listeningField = fieldKey);
-    await _speech.listen(onResult: (result) {
-      if (!mounted) return;
-      final words = result.recognizedWords;
-      if (words.isEmpty) return;
-      setState(() {
-        if (isDate) {
-          final parsed = DateParser.parseTypedDate(words) ??
-              DateParser.parse(words).expiryDate;
-          controller.text = parsed != null
-              ? _nzDateFmt.format(parsed)
-              : controller.text;
-        } else if (isNumber) {
-          final digits = words.replaceAll(RegExp(r'[^0-9]'), '');
-          if (digits.isNotEmpty) controller.text = digits;
-        } else {
-          controller.text = words;
-        }
-      });
-    });
+    await _speech.listen(
+      listenOptions: SpeechListenOptions(
+        partialResults: true,
+        listenMode: ListenMode.dictation,
+        cancelOnError: true,
+        listenFor: const Duration(seconds: 20),
+        pauseFor: const Duration(seconds: 4),
+      ),
+      onResult: (result) {
+        if (!mounted) return;
+        final words = result.recognizedWords;
+        if (words.isEmpty) return;
+        setState(() {
+          if (isDate) {
+            final compact = words.replaceAll(RegExp(r'[^0-9/\-. ]'), '');
+            final parsed = DateParser.parseTypedDate(compact) ??
+                DateParser.parse(words).expiryDate;
+            // Show raw words while partial results stream in, so the user
+            // sees that the mic heard them even before a date is parsed.
+            controller.text =
+                parsed != null ? _nzDateFmt.format(parsed) : words;
+          } else if (isNumber) {
+            final digits = words.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) controller.text = digits;
+          } else {
+            controller.text = words;
+          }
+        });
+      },
+    );
   }
 
   Widget _micButton(String fieldKey, TextEditingController controller,
@@ -237,6 +263,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         expiryDate: expiryDate,
         addedDate: widget.product?.addedDate ?? DateTime.now(),
         notes: _notesCtrl.text.trim(),
+        createdBy: widget.product?.createdBy.isNotEmpty == true
+            ? widget.product!.createdBy
+            : _username,
       );
       String? mergeMessage;
       if (_isEdit) {
