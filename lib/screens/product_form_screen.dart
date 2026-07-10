@@ -1,18 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:speech_to_text/speech_to_text.dart';
-
-import '../services/user_service.dart';
 
 import '../models/product.dart';
 import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
-import '../services/ocr_service.dart';
+import '../services/user_service.dart';
+import '../utils/batch_input_formatter.dart';
 import '../utils/date_parser.dart';
 import '../utils/nz_date_input_formatter.dart';
+import '../utils/scan_helper.dart';
 
 class ProductFormScreen extends StatefulWidget {
   final Product? product;
@@ -55,6 +54,13 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   String? _listeningField;
   String _username = '';
 
+  /// One focus node per dictatable field so the mic stops as soon as the
+  /// user moves to a different field.
+  late final Map<String, FocusNode> _focusNodes = {
+    for (final key in ['brand', 'name', 'expiry', 'batch', 'qty', 'notes'])
+      key: FocusNode(),
+  };
+
   bool get _isEdit => widget.product != null;
 
   @override
@@ -69,12 +75,15 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     UserService.instance.username.then((name) {
       if (mounted && name != null) _username = name;
     });
+    for (final entry in _focusNodes.entries) {
+      entry.value.addListener(() => _onFieldFocus(entry.key));
+    }
     _nameCtrl =
         TextEditingController(text: p?.name ?? scan?.productName ?? '');
     _brandCtrl =
         TextEditingController(text: p?.brand ?? scan?.brand ?? '');
-    _batchCtrl =
-        TextEditingController(text: p?.batch ?? scan?.batch ?? '');
+    _batchCtrl = TextEditingController(
+        text: BatchInputFormatter.normalize(p?.batch ?? scan?.batch ?? ''));
     final initialExpiry = p?.expiryDate ?? scan?.expiryDate;
     _expiryCtrl = TextEditingController(
         text: initialExpiry == null ? '' : _nzDateFmt.format(initialExpiry));
@@ -87,6 +96,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   @override
   void dispose() {
     _speech.stop();
+    for (final node in _focusNodes.values) {
+      node.dispose();
+    }
     _nameCtrl.dispose();
     _brandCtrl.dispose();
     _batchCtrl.dispose();
@@ -94,6 +106,17 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _qtyCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
+  }
+
+  /// Stops dictation when the user moves to a field other than the one
+  /// being dictated into.
+  void _onFieldFocus(String key) {
+    if (_focusNodes[key]!.hasFocus &&
+        _speech.isListening &&
+        _listeningField != key) {
+      _speech.stop();
+      setState(() => _listeningField = null);
+    }
   }
 
   int get _quantityValue => int.tryParse(_qtyCtrl.text.trim()) ?? 1;
@@ -165,6 +188,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
           } else if (isNumber) {
             final digits = words.replaceAll(RegExp(r'[^0-9]'), '');
             if (digits.isNotEmpty) controller.text = digits;
+          } else if (fieldKey == 'batch') {
+            controller.text = BatchInputFormatter.normalize(words);
           } else {
             controller.text = words;
           }
@@ -190,17 +215,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   Future<void> _rescan() async {
     setState(() => _rescanning = true);
     try {
-      final photo = await ImagePicker()
-          .pickImage(source: ImageSource.camera, imageQuality: 90);
-      if (photo == null) return;
-      final result = await OcrService.instance.scanImage(photo.path);
+      await _speech.stop();
       if (!mounted) return;
+      final result = await captureAndRecognize(context);
+      if (result == null || !mounted) return;
       setState(() {
         if (result.expiryDate != null) {
           _expiryCtrl.text = _nzDateFmt.format(result.expiryDate!);
         }
         if (result.batch != null && _batchCtrl.text.isEmpty) {
-          _batchCtrl.text = result.batch!;
+          _batchCtrl.text = BatchInputFormatter.normalize(result.batch!);
         }
         if (result.brand != null && _brandCtrl.text.isEmpty) {
           _brandCtrl.text = result.brand!;
@@ -250,6 +274,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       _snack('Please enter a valid expiry date (dd/mm/yyyy).');
       return;
     }
+    await _speech.stop();
     setState(() => _saving = true);
     try {
       final product = Product(
@@ -401,6 +426,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             ],
             TextFormField(
               controller: _brandCtrl,
+              focusNode: _focusNodes['brand'],
               decoration: InputDecoration(
                 labelText: 'Brand name',
                 prefixIcon: const Icon(Icons.sell_outlined),
@@ -411,6 +437,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _nameCtrl,
+              focusNode: _focusNodes['name'],
               decoration: InputDecoration(
                 labelText: 'Product name *',
                 prefixIcon: const Icon(Icons.shopping_bag_outlined),
@@ -423,6 +450,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _expiryCtrl,
+              focusNode: _focusNodes['expiry'],
               decoration: InputDecoration(
                 labelText: 'Expiry date *',
                 hintText: 'dd/mm/yyyy — type digits, slashes are added',
@@ -457,12 +485,15 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _batchCtrl,
+              focusNode: _focusNodes['batch'],
               decoration: InputDecoration(
                 labelText: 'Batch / lot number',
+                helperText: 'Capitals only, spaces removed automatically',
                 prefixIcon: const Icon(Icons.qr_code_2),
                 suffixIcon: _micButton('batch', _batchCtrl),
               ),
               textCapitalization: TextCapitalization.characters,
+              inputFormatters: [BatchInputFormatter()],
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
@@ -482,6 +513,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 Expanded(
                   child: TextFormField(
                     controller: _qtyCtrl,
+                    focusNode: _focusNodes['qty'],
                     decoration: InputDecoration(
                       labelText: 'Quantity *',
                       prefixIcon: const Icon(Icons.numbers),
@@ -516,6 +548,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _notesCtrl,
+              focusNode: _focusNodes['notes'],
               decoration: InputDecoration(
                 labelText: 'Notes',
                 prefixIcon: const Icon(Icons.notes),
@@ -538,6 +571,15 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                             fontFamily: 'monospace', fontSize: 12)),
                   ),
                 ],
+              ),
+            ],
+            if (_isEdit) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Added ${DateFormat('dd/MM/yyyy').format(widget.product!.addedDate)}'
+                '${widget.product!.createdBy.isNotEmpty ? ' by ${widget.product!.createdBy}' : ''}',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
               ),
             ],
             const SizedBox(height: 24),

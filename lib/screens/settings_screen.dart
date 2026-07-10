@@ -10,6 +10,7 @@ import '../services/notification_service.dart';
 import '../services/user_service.dart';
 import '../widgets/report_options_dialog.dart';
 import 'login_screen.dart';
+import 'users_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -35,7 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _frequency = 'weekly';
   int _dayOfMonth = 1;
   String _username = '';
-  String _email = '';
+  bool _isAdmin = false;
   List<Store> _stores = [];
   bool _loading = true;
   bool _busy = false;
@@ -55,7 +56,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final dayOfMonth = await service.getDayOfMonth();
     final stores = await DatabaseService.instance.getStores();
     final username = await UserService.instance.username ?? '';
-    final email = await UserService.instance.email ?? '';
+    final isAdmin = await UserService.instance.isAdmin;
     if (!mounted) return;
     setState(() {
       _weekday = weekday;
@@ -65,7 +66,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _dayOfMonth = dayOfMonth;
       _stores = stores;
       _username = username;
-      _email = email;
+      _isAdmin = isAdmin;
       _loading = false;
     });
   }
@@ -253,23 +254,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _sectionTitle('Profile'),
                 Card(
                   margin: EdgeInsets.zero,
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      child: Text(_username.isNotEmpty
-                          ? _username[0].toUpperCase()
-                          : '?'),
-                    ),
-                    title: Text(
-                        _username.isNotEmpty ? _username : 'Not signed in'),
-                    subtitle: Text(_email.isNotEmpty
-                        ? _email
-                        : 'Sign in so reports show who created entries'),
-                    trailing: TextButton.icon(
-                      onPressed: _busy ? null : _signOut,
-                      icon: const Icon(Icons.logout, size: 18),
-                      label: Text(
-                          _username.isNotEmpty ? 'Switch user' : 'Sign in'),
-                    ),
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: CircleAvatar(
+                          child: Text(_username.isNotEmpty
+                              ? _username[0].toUpperCase()
+                              : '?'),
+                        ),
+                        title: Text(
+                          _username.isNotEmpty ? _username : 'Not signed in',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style:
+                              const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        subtitle:
+                            Text(_isAdmin ? 'Administrator' : 'Staff'),
+                        trailing: IconButton(
+                          tooltip:
+                              _username.isNotEmpty ? 'Switch user' : 'Sign in',
+                          icon: const Icon(Icons.logout),
+                          onPressed: _busy ? null : _signOut,
+                        ),
+                      ),
+                      if (_isAdmin) ...[
+                        const Divider(height: 1),
+                        ListTile(
+                          leading: const Icon(Icons.group),
+                          title: const Text('Manage users'),
+                          subtitle: const Text(
+                              'Create up to 10 staff accounts — only the '
+                              'admin can see them'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () async {
+                            await Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const UsersScreen()),
+                            );
+                          },
+                        ),
+                      ],
+                    ],
                   ),
                 ),
                 const SizedBox(height: 24),
@@ -419,9 +445,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     leading: const Icon(Icons.merge_type),
                     title: const Text('Clean up duplicate rows'),
                     subtitle: const Text(
-                        'Merges rows with the same brand, product, batch and '
-                        'expiry (ignoring case and spacing) by combining '
-                        'quantities'),
+                        'Merges rows with the same brand, product, batch, '
+                        'category and expiry (ignoring case and spacing) by '
+                        'combining quantities'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: _busy ? null : _cleanupDuplicates,
                   ),
