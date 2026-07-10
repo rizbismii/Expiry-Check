@@ -1,6 +1,7 @@
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../models/app_user.dart';
 import '../models/product.dart';
 import '../models/store.dart';
 
@@ -49,10 +50,14 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._();
 
   static const _dbName = 'expiry_check.db';
-  static const _dbVersion = 3;
+  static const _dbVersion = 4;
   static const _table = 'products';
   static const _storesTable = 'stores';
   static const _deletionsTable = 'deletion_log';
+  static const _usersTable = 'users';
+
+  /// Admin may create at most this many staff accounts.
+  static const maxUsers = 10;
 
   static const defaultStoreNames = ['Main Store', 'Branch 2', 'Branch 3'];
 
@@ -86,6 +91,7 @@ class DatabaseService {
         ''');
         await _createStoresTable(db);
         await _createDeletionsTable(db);
+        await _createUsersTable(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
         if (oldVersion < 2) {
@@ -98,8 +104,21 @@ class DatabaseService {
               "ALTER TABLE $_table ADD COLUMN createdBy TEXT NOT NULL DEFAULT ''");
           await _createDeletionsTable(db);
         }
+        if (oldVersion < 4) {
+          await _createUsersTable(db);
+        }
       },
     );
+  }
+
+  Future<void> _createUsersTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE $_usersTable (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+        password TEXT NOT NULL
+      )
+    ''');
   }
 
   Future<void> _createDeletionsTable(Database db) async {
@@ -149,6 +168,66 @@ class DatabaseService {
     );
   }
 
+  // ---- Users (admin-managed staff accounts) ----
+
+  Future<List<AppUser>> getUsers() async {
+    final db = await database;
+    final rows = await db.query(_usersTable, orderBy: 'username ASC');
+    return rows.map(AppUser.fromMap).toList();
+  }
+
+  /// Adds a staff user. Returns null on success, or an error message.
+  Future<String?> addUser(String username, String password) async {
+    final db = await database;
+    final count = Sqflite.firstIntValue(
+            await db.rawQuery('SELECT COUNT(*) FROM $_usersTable')) ??
+        0;
+    if (count >= maxUsers) {
+      return 'User limit reached ($maxUsers). Delete a user first.';
+    }
+    try {
+      await db.insert(_usersTable, {
+        'username': username.trim(),
+        'password': password,
+      });
+      return null;
+    } on DatabaseException {
+      return 'Username "$username" already exists.';
+    }
+  }
+
+  Future<void> updateUserPassword(int id, String password) async {
+    final db = await database;
+    await db.update(_usersTable, {'password': password},
+        where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<void> deleteUser(int id) async {
+    final db = await database;
+    await db.delete(_usersTable, where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Looks up a staff user by credentials; null when they don't match.
+  Future<AppUser?> findUser(String username, String password) async {
+    final db = await database;
+    final rows = await db.query(
+      _usersTable,
+      where: 'username = ? COLLATE NOCASE AND password = ?',
+      whereArgs: [username.trim(), password],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : AppUser.fromMap(rows.first);
+  }
+
+  /// Distinct brand names already in the inventory, used to auto-correct
+  /// OCR misreads against products the shop actually stocks.
+  Future<List<String>> getKnownBrands() async {
+    final db = await database;
+    final rows = await db.rawQuery(
+        "SELECT DISTINCT brand FROM $_table WHERE brand != '' ");
+    return rows.map((r) => r['brand'] as String).toList();
+  }
+
   // ---- Products ----
 
   Future<Product> insert(Product product) async {
@@ -194,29 +273,27 @@ class DatabaseService {
   static bool _sameDay(DateTime a, DateTime b) =>
       a.year == b.year && a.month == b.month && a.day == b.day;
 
-  static String _duplicateKey(Product p) => [
+  /// Key identifying duplicate rows: store + brand + name + batch +
+  /// category + expiry day, all normalized.
+  static String duplicateKey(Product p) => [
         p.storeId,
         normalizeForMatch(p.name),
         normalizeForMatch(p.brand),
         normalizeForMatch(p.batch),
+        normalizeForMatch(p.category),
         '${p.expiryDate.year}-${p.expiryDate.month}-${p.expiryDate.day}',
       ].join('|');
 
   /// Finds an existing product in the same store with the same brand, name,
-  /// batch and expiry date, used to merge duplicates by increasing quantity
-  /// instead of adding a second row. Comparison is done in Dart so casing,
-  /// extra spaces and stored date-time noise never break the match.
+  /// batch, category and expiry date, used to merge duplicates by increasing
+  /// quantity instead of adding a second row. Comparison is done in Dart so
+  /// casing, spacing and stored date-time noise never break the match.
   Future<Product?> findMatching(Product p) async {
     final candidates = await getAll(storeId: p.storeId);
-    final name = normalizeForMatch(p.name);
-    final brand = normalizeForMatch(p.brand);
-    final batch = normalizeForMatch(p.batch);
+    final key = duplicateKey(p);
     for (final e in candidates) {
       if (e.id != null && e.id == p.id) continue; // never merge into itself
-      if (normalizeForMatch(e.name) == name &&
-          normalizeForMatch(e.brand) == brand &&
-          normalizeForMatch(e.batch) == batch &&
-          _sameDay(e.expiryDate, p.expiryDate)) {
+      if (duplicateKey(e) == key && _sameDay(e.expiryDate, p.expiryDate)) {
         return e;
       }
     }
@@ -236,7 +313,7 @@ class DatabaseService {
     final byKey = <String, Product>{};
     var removed = 0;
     for (final p in all) {
-      final key = _duplicateKey(p);
+      final key = duplicateKey(p);
       final existing = byKey[key];
       if (existing == null) {
         byKey[key] = p;

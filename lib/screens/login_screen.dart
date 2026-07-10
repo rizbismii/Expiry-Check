@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/store.dart';
+import '../services/database_service.dart';
 import '../services/user_service.dart';
 
-/// One-time sign-in: username + email, passcode sent to the email, code
-/// typed back in to verify. The profile is stored on-device.
+/// Two-step sign-in: username + password, then store branch selection.
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -15,49 +16,52 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
   final _usernameCtrl = TextEditingController();
-  final _emailCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
-  bool _codeSent = false;
+  final _passwordCtrl = TextEditingController();
+  bool _obscure = true;
   bool _busy = false;
+
+  // Step 2 state.
+  bool _authenticated = false;
+  List<Store> _stores = [];
+  int? _storeId;
 
   @override
   void dispose() {
     _usernameCtrl.dispose();
-    _emailCtrl.dispose();
-    _codeCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
   }
 
-  Future<void> _sendCode() async {
+  Future<void> _signIn() async {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _busy = true);
-    final passcode = UserService.generatePasscode();
-    final opened = await UserService.instance.startVerification(
-      username: _usernameCtrl.text.trim(),
-      email: _emailCtrl.text.trim(),
-      passcode: passcode,
-    );
+    final ok = await UserService.instance
+        .signIn(_usernameCtrl.text, _passwordCtrl.text);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() => _busy = false);
+      _snack('Incorrect username or password.');
+      return;
+    }
+    final stores = await DatabaseService.instance.getStores();
+    final prefs = await SharedPreferences.getInstance();
+    final savedStore = prefs.getInt('selected_store_id');
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _codeSent = true;
+      _authenticated = true;
+      _stores = stores;
+      _storeId = stores.any((s) => s.id == savedStore)
+          ? savedStore
+          : (stores.isNotEmpty ? stores.first.id : null);
     });
-    _snack(opened
-        ? 'Send the email that just opened, then enter the passcode from '
-            'your inbox.'
-        : 'No email app found — could not send the passcode.');
   }
 
-  Future<void> _verify() async {
-    setState(() => _busy = true);
-    final ok = await UserService.instance.verifyPasscode(_codeCtrl.text);
-    if (!mounted) return;
-    setState(() => _busy = false);
-    if (ok) {
-      Navigator.of(context).pop(true);
-    } else {
-      _snack('Incorrect or expired passcode. Tap "Send passcode" to retry.');
-    }
+  Future<void> _continueToStore() async {
+    if (_storeId == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('selected_store_id', _storeId!);
+    if (mounted) Navigator.of(context).pop(true);
   }
 
   void _snack(String message) {
@@ -73,89 +77,114 @@ class _LoginScreenState extends State<LoginScreen> {
     return PopScope(
       canPop: false,
       child: Scaffold(
-        appBar: AppBar(title: const Text('Sign in')),
-        body: Form(
-          key: _formKey,
-          child: ListView(
-            padding: const EdgeInsets.all(24),
+        appBar: AppBar(
+            title: Text(_authenticated ? 'Select store' : 'Sign in')),
+        body: ListView(
+          padding: const EdgeInsets.all(24),
+          children: [
+            Icon(Icons.inventory_2, size: 64, color: scheme.primary),
+            const SizedBox(height: 8),
+            const Text(
+              'Expiry Check',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 24),
+            if (!_authenticated) _buildCredentialsStep() else _buildStoreStep(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCredentialsStep() {
+    return Form(
+      key: _formKey,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextFormField(
+            controller: _usernameCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+            autofillHints: const [AutofillHints.username],
+            validator: (v) => (v == null || v.trim().isEmpty)
+                ? 'Username is required'
+                : null,
+          ),
+          const SizedBox(height: 12),
+          TextFormField(
+            controller: _passwordCtrl,
+            obscureText: _obscure,
+            decoration: InputDecoration(
+              labelText: 'Password',
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                onPressed: () => setState(() => _obscure = !_obscure),
+              ),
+            ),
+            autofillHints: const [AutofillHints.password],
+            onFieldSubmitted: (_) => _signIn(),
+            validator: (v) =>
+                (v == null || v.isEmpty) ? 'Password is required' : null,
+          ),
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            onPressed: _busy ? null : _signIn,
+            icon: const Icon(Icons.login),
+            label: const Text('Sign in'),
+            style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14)),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            'Ask the admin for your username and password.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStoreStep() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Signed in as ${_usernameCtrl.text.trim()}. '
+          'Which store are you working in?',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey.shade700),
+        ),
+        const SizedBox(height: 12),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Column(
             children: [
-              Icon(Icons.inventory_2, size: 64, color: scheme.primary),
-              const SizedBox(height: 8),
-              const Text(
-                'Expiry Check',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Your name is attached to the stock you add or delete, '
-                'and appears on Excel reports.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey.shade600),
-              ),
-              const SizedBox(height: 24),
-              TextFormField(
-                controller: _usernameCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Username *',
-                  prefixIcon: Icon(Icons.person_outline),
+              for (final store in _stores)
+                RadioListTile<int>(
+                  value: store.id,
+                  groupValue: _storeId,
+                  title: Text(store.name),
+                  secondary: const Icon(Icons.store),
+                  onChanged: (v) => setState(() => _storeId = v),
                 ),
-                textCapitalization: TextCapitalization.words,
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Username is required'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _emailCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Email *',
-                  prefixIcon: Icon(Icons.alternate_email),
-                ),
-                keyboardType: TextInputType.emailAddress,
-                validator: (v) {
-                  final value = (v ?? '').trim();
-                  if (value.isEmpty) return 'Email is required';
-                  if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(value)) {
-                    return 'Enter a valid email address';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-              FilledButton.tonalIcon(
-                onPressed: _busy ? null : _sendCode,
-                icon: const Icon(Icons.forward_to_inbox),
-                label: Text(_codeSent ? 'Resend passcode' : 'Send passcode'),
-              ),
-              if (_codeSent) ...[
-                const SizedBox(height: 24),
-                TextFormField(
-                  controller: _codeCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'One-time passcode',
-                    hintText: '6-digit code from the email',
-                    prefixIcon: Icon(Icons.pin),
-                  ),
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(6),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed: _busy ? null : _verify,
-                  icon: const Icon(Icons.login),
-                  label: const Text('Verify and sign in'),
-                  style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                ),
-              ],
             ],
           ),
         ),
-      ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: _storeId == null ? null : _continueToStore,
+          icon: const Icon(Icons.arrow_forward),
+          label: const Text('Continue'),
+          style: FilledButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14)),
+        ),
+      ],
     );
   }
 }

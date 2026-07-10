@@ -2,7 +2,9 @@ import 'package:expiry_check/models/product.dart';
 import 'package:expiry_check/models/store.dart';
 import 'package:expiry_check/services/database_service.dart';
 import 'package:expiry_check/services/notification_service.dart';
+import 'package:expiry_check/utils/batch_input_formatter.dart';
 import 'package:expiry_check/utils/nz_date_input_formatter.dart';
+import 'package:expiry_check/utils/text_similarity.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -35,6 +37,59 @@ void main() {
           DatabaseService.normalizeForMatch('ALY32 260513') ==
               DatabaseService.normalizeForMatch('ALY33 260513'),
           isFalse);
+    });
+
+    test('duplicate key includes category', () {
+      Product make(String category) => Product(
+            name: 'Berry Lemon',
+            brand: 'Salty',
+            batch: 'B1',
+            category: category,
+            expiryDate: DateTime(2028, 5, 12),
+            addedDate: DateTime(2026, 7, 10),
+          );
+      expect(DatabaseService.duplicateKey(make('Salt Liquids')),
+          DatabaseService.duplicateKey(make('salt liquids')));
+      expect(
+          DatabaseService.duplicateKey(make('Salt Liquids')) ==
+              DatabaseService.duplicateKey(make('Prefilled Kits')),
+          isFalse);
+    });
+  });
+
+  group('BatchInputFormatter', () {
+    TextEditingValue format(String input) => BatchInputFormatter()
+        .formatEditUpdate(TextEditingValue.empty, TextEditingValue(text: input));
+
+    test('uppercases and strips spaces while typing', () {
+      expect(format('Aly 32 260424').text, 'ALY32260424');
+      expect(format('a l y 32260513').text, 'ALY32260513');
+    });
+
+    test('normalize handles programmatic values', () {
+      expect(BatchInputFormatter.normalize('Aly 32  260424'), 'ALY32260424');
+    });
+  });
+
+  group('TextSimilarity brand correction', () {
+    test('corrects OCR misread of stylized logo', () {
+      const known = ['Salty Puff World', 'Salty Fizzy World', 'DetoxCo'];
+      // Real case: bubble-letter "SALTY" read as "GALTY".
+      expect(TextSimilarity.bestBrandMatch('GALTY', known), isNotNull);
+      expect(TextSimilarity.bestBrandMatch('GALTY', known),
+          anyOf('Salty Puff World', 'Salty Fizzy World'));
+      expect(TextSimilarity.bestBrandMatch('salty puff', known),
+          'Salty Puff World');
+    });
+
+    test('leaves unrelated text alone', () {
+      const known = ['Salty Puff World'];
+      expect(TextSimilarity.bestBrandMatch('Colgate', known), isNull);
+    });
+
+    test('levenshtein basics', () {
+      expect(TextSimilarity.levenshtein('kitten', 'sitting'), 3);
+      expect(TextSimilarity.levenshtein('same', 'same'), 0);
     });
   });
 
