@@ -7,10 +7,11 @@ import '../utils/date_parser.dart';
 import '../utils/text_similarity.dart';
 
 /// Guides the user through capturing up to [maxShots] photos of a product
-/// (front for brand/flavour, bottom/side for expiry & batch), runs on-device
-/// text recognition on each, and parses the combined text. The brand guess is
-/// auto-corrected against brands already in the inventory, which fixes OCR
-/// misreads of stylized logos (e.g. "GALTY" -> "Salty Puff World").
+/// (front for brand/flavour, bottom/side for barcode, prod/expiry & batch),
+/// runs on-device text recognition on each, and parses the combined text. The
+/// brand guess is auto-corrected against brands already in the inventory,
+/// which fixes OCR misreads of stylized logos (e.g. "GALTY" -> "Salty Puff
+/// World").
 ///
 /// Returns null when the user cancels before taking any photo.
 Future<OcrParseResult?> captureAndRecognize(BuildContext context,
@@ -19,8 +20,13 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
   final texts = <String>[];
 
   for (var shot = 1; shot <= maxShots; shot++) {
-    final photo =
-        await picker.pickImage(source: ImageSource.camera, imageQuality: 90);
+    // Full resolution helps ML Kit read small inkjet PRO/EXP/batch lines.
+    final photo = await picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 100,
+      maxWidth: 4096,
+      maxHeight: 4096,
+    );
     if (photo == null) break;
     texts.add(await OcrService.instance.recognizeText(photo.path));
     if (shot == maxShots || !context.mounted) break;
@@ -30,8 +36,9 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
       builder: (context) => AlertDialog(
         title: Text('Photo $shot scanned'),
         content: Text(shot == 1
-            ? 'Scan another side of the pack too? The expiry date and batch '
-                'number are usually on the bottom or back panel.'
+            ? 'Scan the bottom/back panel too — barcode, prod date, expiry '
+                'and batch are usually printed there (often as dotted inkjet '
+                'text under the barcode).'
             : 'Add one more photo? (${maxShots - shot} left)'),
         actions: [
           TextButton(
@@ -62,6 +69,8 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
 
   return OcrParseResult(
     expiryDate: result.expiryDate,
+    prodDate: result.prodDate,
+    barcodeId: result.barcodeId,
     batch: result.batch,
     brand: brand,
     productName: result.productName,

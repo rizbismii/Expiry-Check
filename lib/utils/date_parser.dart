@@ -43,13 +43,22 @@ class DateParser {
     'dec': 12,
   };
 
+  // Allow OCR noise: missing colon, "PR0", spaced "E XP".
   static final _expiryKeywords = RegExp(
-    r'(exp(iry|ires|\.)?\s*(date)?|best\s*(before|by)|use\s*(by|before)|bbe?\b|e\s*:)',
+    r'(exp(iry|ires|\.)?\s*(date)?|best\s*(before|by)|use\s*(by|before)|bbe?\b|'
+    r'\be\s*x\s*p\b|\be\s*:)',
     caseSensitive: false,
   );
 
   static final _mfgKeywords = RegExp(
-    r'(mfg|mfd|manufactur|prod(uction|\.)?\s*date|pkd|packed|\bpro\s*[:.])',
+    r'(mfg|mfd|manufactur|prod(uction|\.)?\s*date|pkd|packed|\bpr[o0]\b)',
+    caseSensitive: false,
+  );
+
+  /// Explicit PRO/EXP (and OCR variants) followed by a compact date.
+  static final _labelledCompactDate = RegExp(
+    r'\b(pr[o0]|mfg|mfd|exp|bbe?)\s*[:.\-]?\s*'
+    r'(\d{8}|\d{2}\s*\d{2}\s*\d{4}|\d{6})',
     caseSensitive: false,
   );
 
@@ -59,7 +68,13 @@ class DateParser {
   );
 
   static final _barcodePattern = RegExp(
-    r'(?:bar\s*code|barcode|ean|upc|gtin)\s*(?:id|no\.?|number|#)?\s*[:.\-#]?\s*([0-9]{8,14})',
+    r'(?:bar\s*code|barcode|ean|upc|gtin)\s*(?:id|no\.?|number|#)?\s*[:.\-#]?\s*([0-9][0-9\s\-]{6,20})',
+    caseSensitive: false,
+  );
+
+  // Typical NZ vape batch printed under EXP: "ALY32 250319".
+  static final _alyBatchPattern = RegExp(
+    r'\b([A-Z]{2,5}\d{1,3})\s*([0-9]{6})\b',
     caseSensitive: false,
   );
 
@@ -80,6 +95,10 @@ class DateParser {
   static final _compact8Pattern = RegExp(r'\b(\d{8})\b');
   // Compact ddmmyy — ambiguous with codes, so only used on keyword lines.
   static final _compact6Pattern = RegExp(r'\b(\d{6})\b');
+  // Spaced compact dates from weak OCR: "19 03 2025" / "19 032025".
+  static final _spacedCompactDate = RegExp(
+    r'\b(\d{2})\s+(\d{2})\s+(\d{4})\b|\b(\d{2})\s+(\d{6})\b',
+  );
 
   // Nicotine/active-ingredient strength, e.g. "11.4 mg/mL", "50mg", "3%".
   static final _strengthPattern = RegExp(
@@ -96,9 +115,43 @@ class DateParser {
   static final _noisePattern = RegExp(
     r'(contains|addictive|warning|caution|keep\s*(out|away)|children|net\s*wt|'
     r'licen[cs]e|concentration|e-?liquid|edition|substance|nikot|whakawara|'
-    r'ingredients|store\s+in|made\s+in|18\s*\+)',
+    r'ingredients|store\s+in|made\s+in|18\s*\+|sub-?\s*ohm|\bseries\b|'
+    r'\b\d+\s*ml\b|nicotine)',
     caseSensitive: false,
   );
+
+  /// Common single-word flavour names used as the product line on vape packs.
+  static const _flavourWords = {
+    'berry',
+    'lemon',
+    'mint',
+    'mango',
+    'grape',
+    'apple',
+    'peach',
+    'cherry',
+    'banana',
+    'melon',
+    'watermelon',
+    'strawberry',
+    'blueberry',
+    'raspberry',
+    'cola',
+    'coffee',
+    'tobacco',
+    'vanilla',
+    'coconut',
+    'pineapple',
+    'orange',
+    'lime',
+    'kiwi',
+    'guava',
+    'lychee',
+    'ice',
+    'menthol',
+    'cream',
+    'custard',
+  };
 
   /// Extracts all recognizable fields from OCR label text.
   static OcrParseResult parse(String text) {
@@ -116,9 +169,21 @@ class DateParser {
       final isMfgLine = _mfgKeywords.hasMatch(line) && !lineHasExpiryKeyword;
       final nearExpiry = lineHasExpiryKeyword ||
           (i > 0 && _expiryKeywords.hasMatch(lines[i - 1]));
-      for (final date in _datesInLine(line, lineHasExpiryKeyword)) {
+      for (final date in _datesInLine(
+          line, lineHasExpiryKeyword || isMfgLine)) {
         candidates.add(_DateCandidate(date, nearExpiry, isMfgLine));
       }
+    }
+
+    // Explicit PRO:/EXP: compact dates — more reliable than free-floating
+    // 8-digit numbers when OCR of the keyword is weak but still present.
+    for (final m in _labelledCompactDate.allMatches(text)) {
+      final label = m.group(1)!.toLowerCase().replaceAll('0', 'o');
+      final digits = m.group(2)!.replaceAll(RegExp(r'\s'), '');
+      final date = _parseCompactDigits(digits);
+      if (date == null) continue;
+      final isExp = label.startsWith('exp') || label == 'bb' || label == 'bbe';
+      candidates.add(_DateCandidate(date, isExp, !isExp));
     }
 
     DateTime? expiry;
@@ -136,7 +201,7 @@ class DateParser {
     DateTime? prodDate;
     final mfgDates = candidates.where((c) => c.onMfgLine).toList();
     if (mfgDates.isNotEmpty) {
-      mfgDates.sort((a, b) => b.date.compareTo(a.date));
+      mfgDates.sort((a, b) => a.date.compareTo(b.date));
       prodDate = mfgDates.first.date;
       // Don't reuse the same calendar day as both prod and expiry.
       if (expiry != null &&
@@ -147,8 +212,38 @@ class DateParser {
       }
     }
 
+    // Bottom-panel fallback: two compact dates near a barcode, earlier = prod,
+    // later = expiry (common when PRO/EXP keywords fail OCR).
+    if (expiry == null || prodDate == null) {
+      final compactDates = <DateTime>[];
+      for (final line in lines) {
+        if (_licenceLine(line)) continue;
+        for (final m in _compact8Pattern.allMatches(line)) {
+          final d = _parseCompactDigits(m.group(1)!);
+          if (d != null) compactDates.add(d);
+        }
+        for (final m in _spacedCompactDate.allMatches(line)) {
+          final digits = m.group(0)!.replaceAll(RegExp(r'\s'), '');
+          final d = _parseCompactDigits(digits);
+          if (d != null) compactDates.add(d);
+        }
+      }
+      compactDates.sort((a, b) => a.compareTo(b));
+      final unique = <DateTime>[];
+      for (final d in compactDates) {
+        if (unique.isEmpty || unique.last != d) unique.add(d);
+      }
+      if (unique.length >= 2) {
+        prodDate ??= unique.first;
+        expiry ??= unique.last;
+      } else if (unique.length == 1) {
+        expiry ??= unique.first;
+      }
+    }
+
     final batchMatch = _batchPattern.firstMatch(text);
     var batch = batchMatch?.group(1)?.toUpperCase();
+    batch ??= _alyBatch(lines);
     batch ??= _fallbackBatch(lines);
 
     final barcodeId = _findBarcode(text, lines);
@@ -159,6 +254,8 @@ class DateParser {
     var productName = names.$2;
     if (productName != null && strength != null) {
       productName = '$productName $strength';
+    } else if (productName == null && strength != null) {
+      productName = strength;
     }
 
     return OcrParseResult(
@@ -206,7 +303,7 @@ class DateParser {
     return _safeDate(year, month, day, minYear: 1990);
   }
 
-  static List<DateTime> _datesInLine(String line, bool hasExpiryKeyword) {
+  static List<DateTime> _datesInLine(String line, bool hasDateKeyword) {
     final results = <DateTime>[];
     final consumed = <(int, int)>[];
 
@@ -233,30 +330,24 @@ class DateParser {
         consumed.add((m.start, m.end));
       }
     }
-    for (final m in _compact8Pattern.allMatches(line)) {
+    for (final m in _spacedCompactDate.allMatches(line)) {
       if (overlaps(m.start, m.end)) continue;
-      final digits = m.group(1)!;
-      DateTime? d;
-      // 20280512 style (year first) — only plausible when it starts with 20xx.
-      if (digits.startsWith('20')) {
-        d = _safeDate(
-          int.parse(digits.substring(0, 4)),
-          int.parse(digits.substring(4, 6)),
-          int.parse(digits.substring(6, 8)),
-        );
-      }
-      // 12052028 style (ddmmyyyy) as used on NZ vape/e-liquid packaging.
-      d ??= _safeDate(
-        int.parse(digits.substring(4, 8)),
-        int.parse(digits.substring(2, 4)),
-        int.parse(digits.substring(0, 2)),
-      );
+      final digits = m.group(0)!.replaceAll(RegExp(r'\s'), '');
+      final d = _parseCompactDigits(digits);
       if (d != null) {
         results.add(d);
         consumed.add((m.start, m.end));
       }
     }
-    if (hasExpiryKeyword) {
+    for (final m in _compact8Pattern.allMatches(line)) {
+      if (overlaps(m.start, m.end)) continue;
+      final d = _parseCompactDigits(m.group(1)!);
+      if (d != null) {
+        results.add(d);
+        consumed.add((m.start, m.end));
+      }
+    }
+    if (hasDateKeyword) {
       for (final m in _compact6Pattern.allMatches(line)) {
         if (overlaps(m.start, m.end)) continue;
         final digits = m.group(1)!;
@@ -294,6 +385,35 @@ class DateParser {
     return results;
   }
 
+  static DateTime? _parseCompactDigits(String digits) {
+    if (digits.length == 8) {
+      DateTime? d;
+      // 20280512 style (year first) — only plausible when it starts with 20xx.
+      if (digits.startsWith('20')) {
+        d = _safeDate(
+          int.parse(digits.substring(0, 4)),
+          int.parse(digits.substring(4, 6)),
+          int.parse(digits.substring(6, 8)),
+        );
+      }
+      // 12052028 style (ddmmyyyy) as used on NZ vape/e-liquid packaging.
+      d ??= _safeDate(
+        int.parse(digits.substring(4, 8)),
+        int.parse(digits.substring(2, 4)),
+        int.parse(digits.substring(0, 2)),
+      );
+      return d;
+    }
+    if (digits.length == 6) {
+      return _safeDate(
+        _normalizeYear(int.parse(digits.substring(4, 6))),
+        int.parse(digits.substring(2, 4)),
+        int.parse(digits.substring(0, 2)),
+      );
+    }
+    return null;
+  }
+
   static int _normalizeYear(int year) {
     if (year >= 100) return year;
     return 2000 + year;
@@ -316,40 +436,59 @@ class DateParser {
     return DateTime(year, month + 1, 0);
   }
 
-  /// Labelled barcode / EAN / UPC, or a standalone 8–14 digit code that is
-  /// not part of a date line.
+  static bool _licenceLine(String line) =>
+      RegExp(r'licen[cs]e', caseSensitive: false).hasMatch(line);
+
+  /// Labelled barcode / EAN / UPC, including spaced digits printed under the
+  /// bars (e.g. "6 937035 203622"), skipping manufacture-licence numbers.
   static String? _findBarcode(String text, List<String> lines) {
     final labelled = _barcodePattern.firstMatch(text);
-    if (labelled != null) return labelled.group(1);
+    if (labelled != null) {
+      final digits = labelled.group(1)!.replaceAll(RegExp(r'\D'), '');
+      if (_isPlausibleBarcode(digits)) return digits;
+    }
 
     for (final line in lines) {
       if (_expiryKeywords.hasMatch(line) ||
           _mfgKeywords.hasMatch(line) ||
-          _batchPattern.hasMatch(line)) {
+          _batchPattern.hasMatch(line) ||
+          _licenceLine(line)) {
         continue;
       }
+      final digits = line.replaceAll(RegExp(r'\D'), '');
+      // Whole line is (mostly) a barcode number, possibly with spaces.
+      final nonSpace = line.replaceAll(RegExp(r'\s'), '');
+      final mostlyDigits =
+          nonSpace.isNotEmpty && RegExp(r'^\d+$').hasMatch(nonSpace);
+      if (mostlyDigits && _isPlausibleBarcode(digits)) return digits;
+
       final m = RegExp(r'\b(\d{8}|\d{12,14})\b').firstMatch(line);
       if (m == null) continue;
-      final digits = m.group(1)!;
-      // Skip values that parse as compact dates (ddmmyyyy / yyyymmdd).
-      if (_safeDate(
-            int.parse(digits.substring(4, 8)),
-            int.parse(digits.substring(2, 4)),
-            int.parse(digits.substring(0, 2)),
-          ) !=
-          null) {
-        continue;
-      }
-      if (digits.length == 8 &&
-          _safeDate(
-                int.parse(digits.substring(0, 4)),
-                int.parse(digits.substring(4, 6)),
-                int.parse(digits.substring(6, 8)),
-              ) !=
-              null) {
-        continue;
-      }
-      return digits;
+      final compact = m.group(1)!;
+      if (_looksLikeCompactDate(compact)) continue;
+      if (_isPlausibleBarcode(compact)) return compact;
+    }
+    return null;
+  }
+
+  static bool _isPlausibleBarcode(String digits) =>
+      digits.length == 8 ||
+      digits.length == 12 ||
+      digits.length == 13 ||
+      digits.length == 14;
+
+  static bool _looksLikeCompactDate(String digits) {
+    if (digits.length != 8) return false;
+    return _parseCompactDigits(digits) != null;
+  }
+
+  static String? _alyBatch(List<String> lines) {
+    for (final line in lines) {
+      if (_licenceLine(line)) continue;
+      final m = _alyBatchPattern.firstMatch(line);
+      if (m == null) continue;
+      // Prefer lines near date/barcode panels.
+      return '${m.group(1)!.toUpperCase()}${m.group(2)}';
     }
     return null;
   }
@@ -361,7 +500,9 @@ class DateParser {
     for (var i = 0; i < lines.length; i++) {
       final line = lines[i];
       if (!codeLine.hasMatch(line)) continue;
-      if (_expiryKeywords.hasMatch(line) || _mfgKeywords.hasMatch(line)) {
+      if (_expiryKeywords.hasMatch(line) ||
+          _mfgKeywords.hasMatch(line) ||
+          _licenceLine(line)) {
         continue;
       }
       final letters = line.replaceAll(RegExp(r'[^A-Z]'), '').length;
@@ -373,7 +514,9 @@ class DateParser {
           j < lines.length &&
           (_expiryKeywords.hasMatch(lines[j]) ||
               _mfgKeywords.hasMatch(lines[j])));
-      if (nearDateLine) return line;
+      if (nearDateLine) {
+        return line.replaceAll(RegExp(r'\s+'), '');
+      }
     }
     return null;
   }
@@ -388,20 +531,67 @@ class DateParser {
     return '$value mg';
   }
 
-  /// Returns (brand, productName): the first plausible text line is treated
-  /// as the brand, the next one as the product/flavour name.
+  /// Returns (brand, productName). Stylized logos are often OCR'd as one
+  /// word per line ("SALTY" / "PUFF" / "WORLD"); those are joined into the
+  /// brand, and a following flavour word ("BERRY") becomes the product.
   static (String?, String?) _guessNames(List<String> lines) {
-    String? brand;
-    String? product;
+    final candidates = <String>[];
     for (final line in lines) {
-      if (!_isPlausibleName(line)) continue;
-      if (brand == null) {
-        brand = line;
-      } else if (line.toLowerCase() != brand.toLowerCase()) {
-        product = line;
+      if (_isPlausibleName(line)) candidates.add(line);
+    }
+    if (candidates.isEmpty) return (null, null);
+
+    // Join leading single-token logo fragments into one brand.
+    final brandParts = <String>[];
+    var i = 0;
+    while (i < candidates.length) {
+      final line = candidates[i];
+      final words = line.split(RegExp(r'\s+'));
+      final isFlavour = words.length == 1 &&
+          _flavourWords.contains(words.first.toLowerCase());
+      if (brandParts.isNotEmpty && isFlavour) break;
+      if (brandParts.isNotEmpty &&
+          words.length == 1 &&
+          brandParts.join(' ').split(RegExp(r'\s+')).length >= 3) {
         break;
       }
+      // Stop joining once we already have a multi-word brand and the next
+      // candidate is itself multi-word (likely the flavour line).
+      if (brandParts.length >= 1 &&
+          brandParts.join(' ').contains(' ') &&
+          words.length >= 2) {
+        break;
+      }
+      brandParts.add(line);
+      i++;
+      // Cap brand join at 4 fragments.
+      if (brandParts.length >= 4) break;
+      // After a multi-word line, don't keep joining unless next is a short
+      // brand fragment like "WORLD".
+      if (words.length >= 2) break;
     }
+
+    String? brand = brandParts.isEmpty ? null : brandParts.join(' ');
+    String? product;
+    if (i < candidates.length) {
+      product = candidates[i];
+    }
+
+    // If brand ended up as a single short token and product looks like the
+    // rest of the logo ("WORLD"), keep joining until a flavour appears.
+    if (brand != null &&
+        product != null &&
+        !brand.contains(' ') &&
+        product.split(RegExp(r'\s+')).length == 1 &&
+        !_flavourWords.contains(product.toLowerCase()) &&
+        i + 1 < candidates.length) {
+      final next = candidates[i + 1];
+      if (_flavourWords.contains(next.toLowerCase().split(' ').first)) {
+        brand = '$brand $product';
+        product = next;
+      }
+    }
+
     return (brand, product);
   }
 
@@ -411,7 +601,8 @@ class DateParser {
         _mfgKeywords.hasMatch(line) ||
         _batchPattern.hasMatch(line) ||
         _urlPattern.hasMatch(line) ||
-        _noisePattern.hasMatch(line)) {
+        _noisePattern.hasMatch(line) ||
+        _licenceLine(line)) {
       return false;
     }
     // Lines that are mostly digits or symbols are unlikely to be a name.

@@ -126,7 +126,7 @@ void main() {
 
     test('picks up unlabelled code next to EXP/PRO lines', () {
       final r = DateParser.parse('PRO: 13052026\nEXP: 12052028\nALY32 260513');
-      expect(r.batch, 'ALY32 260513');
+      expect(r.batch, 'ALY32260513');
     });
   });
 
@@ -217,10 +217,62 @@ Manufacture licence number: 4144030056
       expect(r.brand, 'SALTY FIZZY WORLD');
       expect(r.productName, 'BERRY LEMON 11.4 mg/mL');
       expect(r.strength, '11.4 mg/mL');
+      expect(r.barcodeId, '819412025576');
       expect(r.prodDate, DateTime(2026, 5, 13));
       expect(r.expiryDate, DateTime(2028, 5, 12));
-      expect(r.batch, 'ALY32 260513');
+      expect(r.batch, 'ALY32260513');
       expect(r.category, 'Salt Liquids');
+    });
+
+    test('Salty Puff World Berry — front + bottom (user sample)', () {
+      const label = '''
+SALTY PUFF WORLD
+SUB-OHM SALT SERIES
+BERRY
+18+
+30mL
+10 mg/mL
+THIS PRODUCT CONTAINS NICOTINE, WHICH IS A HIGHLY ADDICTIVE SUBSTANCE
+HE NIKOTĪNI KEI ROTO I TĒNEI MEA, HE MATŪ TINO WHAKAWARA
+6 937035 203622
+PRO: 19032025
+EXP: 18032027
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.brand, 'SALTY PUFF WORLD');
+      expect(r.productName, 'BERRY 10 mg/mL');
+      expect(r.barcodeId, '6937035203622');
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+      expect(r.batch, 'ALY32250319');
+      expect(r.category, 'Salt Liquids');
+    });
+
+    test('Salty Puff World — OCR splits logo words + spaced dates', () {
+      // Stylized logo often comes through one word per line; inkjet dates
+      // may lose the colon or gain spaces between digit groups.
+      const label = '''
+SALTY
+PUFF
+WORLD
+SUB-OHM SALT SERIES
+BERRY
+10 mg/mL
+6 937035 203622
+PRO 19 03 2025
+EXP 18 03 2027
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.brand, 'SALTY PUFF WORLD');
+      expect(r.productName, 'BERRY 10 mg/mL');
+      expect(r.barcodeId, '6937035203622');
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+      expect(r.batch, 'ALY32250319');
     });
   });
 }
