@@ -3,6 +3,8 @@
 /// packaging.
 class OcrParseResult {
   final DateTime? expiryDate;
+  final DateTime? prodDate;
+  final String? barcodeId;
   final String? batch;
   final String? brand;
 
@@ -14,6 +16,8 @@ class OcrParseResult {
 
   const OcrParseResult({
     this.expiryDate,
+    this.prodDate,
+    this.barcodeId,
     this.batch,
     this.brand,
     this.productName,
@@ -51,6 +55,11 @@ class DateParser {
 
   static final _batchPattern = RegExp(
     r'(?:batch\s*(?:no\.?|number|#)?|b\.?\s*no\.?|lot\s*(?:no\.?|number|#)?|l\.?\s*no\.?)\s*[:.\-#]?\s*([A-Za-z0-9][A-Za-z0-9\-\/]{1,19})',
+    caseSensitive: false,
+  );
+
+  static final _barcodePattern = RegExp(
+    r'(?:bar\s*code|barcode|ean|upc|gtin)\s*(?:id|no\.?|number|#)?\s*[:.\-#]?\s*([0-9]{8,14})',
     caseSensitive: false,
   );
 
@@ -124,9 +133,25 @@ class DateParser {
       expiry = usable.first.date;
     }
 
+    DateTime? prodDate;
+    final mfgDates = candidates.where((c) => c.onMfgLine).toList();
+    if (mfgDates.isNotEmpty) {
+      mfgDates.sort((a, b) => b.date.compareTo(a.date));
+      prodDate = mfgDates.first.date;
+      // Don't reuse the same calendar day as both prod and expiry.
+      if (expiry != null &&
+          prodDate.year == expiry.year &&
+          prodDate.month == expiry.month &&
+          prodDate.day == expiry.day) {
+        prodDate = null;
+      }
+    }
+
     final batchMatch = _batchPattern.firstMatch(text);
     var batch = batchMatch?.group(1)?.toUpperCase();
     batch ??= _fallbackBatch(lines);
+
+    final barcodeId = _findBarcode(text, lines);
 
     final strength = _findStrength(text);
     final names = _guessNames(lines);
@@ -138,6 +163,8 @@ class DateParser {
 
     return OcrParseResult(
       expiryDate: expiry,
+      prodDate: prodDate,
+      barcodeId: barcodeId,
       batch: batch,
       brand: brand,
       productName: productName,
@@ -287,6 +314,44 @@ class DateParser {
     if (year < 2000 || year > 2100) return null;
     if (month < 1 || month > 12) return null;
     return DateTime(year, month + 1, 0);
+  }
+
+  /// Labelled barcode / EAN / UPC, or a standalone 8–14 digit code that is
+  /// not part of a date line.
+  static String? _findBarcode(String text, List<String> lines) {
+    final labelled = _barcodePattern.firstMatch(text);
+    if (labelled != null) return labelled.group(1);
+
+    for (final line in lines) {
+      if (_expiryKeywords.hasMatch(line) ||
+          _mfgKeywords.hasMatch(line) ||
+          _batchPattern.hasMatch(line)) {
+        continue;
+      }
+      final m = RegExp(r'\b(\d{8}|\d{12,14})\b').firstMatch(line);
+      if (m == null) continue;
+      final digits = m.group(1)!;
+      // Skip values that parse as compact dates (ddmmyyyy / yyyymmdd).
+      if (_safeDate(
+            int.parse(digits.substring(4, 8)),
+            int.parse(digits.substring(2, 4)),
+            int.parse(digits.substring(0, 2)),
+          ) !=
+          null) {
+        continue;
+      }
+      if (digits.length == 8 &&
+          _safeDate(
+                int.parse(digits.substring(0, 4)),
+                int.parse(digits.substring(4, 6)),
+                int.parse(digits.substring(6, 8)),
+              ) !=
+              null) {
+        continue;
+      }
+      return digits;
+    }
+    return null;
   }
 
   /// Codes like "ALY32 260513" printed on the same panel as EXP/PRO dates

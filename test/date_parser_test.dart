@@ -179,12 +179,15 @@ void main() {
       const label = '''
 Colgate MaxFresh
 NET WT 150g
+Barcode: 9300675001234
 MFD: 02/2025
 EXP: 01/2027
 Batch No: CG44521
 ''';
       final r = DateParser.parse(label);
       expect(r.brand, 'Colgate MaxFresh');
+      expect(r.barcodeId, '9300675001234');
+      expect(r.prodDate, DateTime(2025, 2, 28));
       expect(r.expiryDate, DateTime(2027, 1, 31));
       expect(r.batch, 'CG44521');
     });
@@ -214,6 +217,7 @@ Manufacture licence number: 4144030056
       expect(r.brand, 'SALTY FIZZY WORLD');
       expect(r.productName, 'BERRY LEMON 11.4 mg/mL');
       expect(r.strength, '11.4 mg/mL');
+      expect(r.prodDate, DateTime(2026, 5, 13));
       expect(r.expiryDate, DateTime(2028, 5, 12));
       expect(r.batch, 'ALY32 260513');
       expect(r.category, 'Salt Liquids');

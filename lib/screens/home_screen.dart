@@ -107,6 +107,7 @@ class _HomeScreenState extends State<HomeScreen> {
           .where((p) =>
               p.name.toLowerCase().contains(q) ||
               p.brand.toLowerCase().contains(q) ||
+              p.barcodeId.toLowerCase().contains(q) ||
               p.batch.toLowerCase().contains(q))
           .toList();
     }
@@ -396,7 +397,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       child: TextField(
         decoration: const InputDecoration(
-          hintText: 'Search name, brand or batch…',
+          hintText: 'Search name, brand, barcode or batch…',
           prefixIcon: Icon(Icons.search),
         ),
         onChanged: (v) => setState(() => _search = v.trim()),
@@ -438,6 +439,9 @@ class _HomeScreenState extends State<HomeScreen> {
         ? '${product.brand} — ${product.name}'
         : product.name;
     final subtitleParts = <String>[
+      if (product.barcodeId.isNotEmpty) 'Barcode ${product.barcodeId}',
+      if (product.prodDate != null)
+        'Prod ${dateFmt.format(product.prodDate!)}',
       if (product.batch.isNotEmpty) 'Batch ${product.batch}',
       'Qty ${product.quantity}',
     ];

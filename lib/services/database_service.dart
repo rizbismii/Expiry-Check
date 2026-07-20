@@ -50,7 +50,7 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._();
 
   static const _dbName = 'expiry_check.db';
-  static const _dbVersion = 4;
+  static const _dbVersion = 5;
   static const _table = 'products';
   static const _storesTable = 'stores';
   static const _deletionsTable = 'deletion_log';
@@ -80,9 +80,11 @@ class DatabaseService {
             storeId INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
             brand TEXT NOT NULL DEFAULT '',
+            barcodeId TEXT NOT NULL DEFAULT '',
             batch TEXT NOT NULL DEFAULT '',
             category TEXT NOT NULL DEFAULT 'General',
             quantity INTEGER NOT NULL DEFAULT 1,
+            prodDate TEXT,
             expiryDate TEXT NOT NULL,
             addedDate TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
@@ -106,6 +108,11 @@ class DatabaseService {
         }
         if (oldVersion < 4) {
           await _createUsersTable(db);
+        }
+        if (oldVersion < 5) {
+          await db.execute(
+              "ALTER TABLE $_table ADD COLUMN barcodeId TEXT NOT NULL DEFAULT ''");
+          await db.execute('ALTER TABLE $_table ADD COLUMN prodDate TEXT');
         }
       },
     );

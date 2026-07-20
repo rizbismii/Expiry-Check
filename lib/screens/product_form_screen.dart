@@ -38,7 +38,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _nameCtrl;
   late final TextEditingController _brandCtrl;
+  late final TextEditingController _barcodeCtrl;
   late final TextEditingController _batchCtrl;
+  late final TextEditingController _prodDateCtrl;
   late final TextEditingController _expiryCtrl;
   late final TextEditingController _qtyCtrl;
   late final TextEditingController _notesCtrl;
@@ -57,7 +59,16 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
   /// One focus node per dictatable field so the mic stops as soon as the
   /// user moves to a different field.
   late final Map<String, FocusNode> _focusNodes = {
-    for (final key in ['brand', 'name', 'expiry', 'batch', 'qty', 'notes'])
+    for (final key in [
+      'brand',
+      'name',
+      'barcode',
+      'prodDate',
+      'expiry',
+      'batch',
+      'qty',
+      'notes',
+    ])
       key: FocusNode(),
   };
 
@@ -82,8 +93,13 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         TextEditingController(text: p?.name ?? scan?.productName ?? '');
     _brandCtrl =
         TextEditingController(text: p?.brand ?? scan?.brand ?? '');
+    _barcodeCtrl = TextEditingController(
+        text: p?.barcodeId ?? scan?.barcodeId ?? '');
     _batchCtrl = TextEditingController(
         text: BatchInputFormatter.normalize(p?.batch ?? scan?.batch ?? ''));
+    final initialProd = p?.prodDate ?? scan?.prodDate;
+    _prodDateCtrl = TextEditingController(
+        text: initialProd == null ? '' : _nzDateFmt.format(initialProd));
     final initialExpiry = p?.expiryDate ?? scan?.expiryDate;
     _expiryCtrl = TextEditingController(
         text: initialExpiry == null ? '' : _nzDateFmt.format(initialExpiry));
@@ -101,7 +117,9 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     }
     _nameCtrl.dispose();
     _brandCtrl.dispose();
+    _barcodeCtrl.dispose();
     _batchCtrl.dispose();
+    _prodDateCtrl.dispose();
     _expiryCtrl.dispose();
     _qtyCtrl.dispose();
     _notesCtrl.dispose();
@@ -223,6 +241,12 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         if (result.expiryDate != null) {
           _expiryCtrl.text = _nzDateFmt.format(result.expiryDate!);
         }
+        if (result.prodDate != null && _prodDateCtrl.text.isEmpty) {
+          _prodDateCtrl.text = _nzDateFmt.format(result.prodDate!);
+        }
+        if (result.barcodeId != null && _barcodeCtrl.text.isEmpty) {
+          _barcodeCtrl.text = result.barcodeId!;
+        }
         if (result.batch != null && _batchCtrl.text.isEmpty) {
           _batchCtrl.text = BatchInputFormatter.normalize(result.batch!);
         }
@@ -238,6 +262,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       final found = [
         if (result.productName != null) 'product',
         if (result.brand != null) 'brand',
+        if (result.barcodeId != null) 'barcode',
+        if (result.prodDate != null) 'prod date',
         if (result.expiryDate != null) 'expiry date',
         if (result.batch != null) 'batch',
         if (result.category != null) 'category',
@@ -252,18 +278,20 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     }
   }
 
-  Future<void> _pickDate() async {
+  Future<void> _pickDate({required bool isProdDate}) async {
     final now = DateTime.now();
-    final current = DateParser.parseTypedDate(_expiryCtrl.text);
+    final controller = isProdDate ? _prodDateCtrl : _expiryCtrl;
+    final current = DateParser.parseTypedDate(controller.text);
     final picked = await showDatePicker(
       context: context,
-      initialDate: current ?? now.add(const Duration(days: 30)),
-      firstDate: DateTime(now.year - 5),
+      initialDate: current ??
+          (isProdDate ? now : now.add(const Duration(days: 30))),
+      firstDate: DateTime(now.year - 20),
       lastDate: DateTime(now.year + 20),
-      helpText: 'Select expiry date',
+      helpText: isProdDate ? 'Select prod date' : 'Select expiry date',
     );
     if (picked != null) {
-      setState(() => _expiryCtrl.text = _nzDateFmt.format(picked));
+      setState(() => controller.text = _nzDateFmt.format(picked));
     }
   }
 
@@ -274,6 +302,15 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       _snack('Please enter a valid expiry date (dd/mm/yyyy).');
       return;
     }
+    final prodDateText = _prodDateCtrl.text.trim();
+    DateTime? prodDate;
+    if (prodDateText.isNotEmpty) {
+      prodDate = DateParser.parseTypedDate(prodDateText);
+      if (prodDate == null) {
+        _snack('Please enter a valid prod date (dd/mm/yyyy), or leave it blank.');
+        return;
+      }
+    }
     await _speech.stop();
     setState(() => _saving = true);
     try {
@@ -282,9 +319,11 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         storeId: _storeId,
         name: _nameCtrl.text.trim(),
         brand: _brandCtrl.text.trim(),
+        barcodeId: _barcodeCtrl.text.trim(),
         batch: _batchCtrl.text.trim(),
         category: _category,
         quantity: _quantityValue,
+        prodDate: prodDate,
         expiryDate: expiryDate,
         addedDate: widget.product?.addedDate ?? DateTime.now(),
         notes: _notesCtrl.text.trim(),
@@ -449,6 +488,48 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             ),
             const SizedBox(height: 12),
             TextFormField(
+              controller: _barcodeCtrl,
+              focusNode: _focusNodes['barcode'],
+              decoration: InputDecoration(
+                labelText: 'Barcode ID',
+                prefixIcon: const Icon(Icons.qr_code_scanner),
+                suffixIcon: _micButton('barcode', _barcodeCtrl),
+              ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _prodDateCtrl,
+              focusNode: _focusNodes['prodDate'],
+              decoration: InputDecoration(
+                labelText: 'Prod date',
+                hintText: 'dd/mm/yyyy — type digits, slashes are added',
+                prefixIcon: const Icon(Icons.factory_outlined),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _micButton('prodDate', _prodDateCtrl, isDate: true),
+                    IconButton(
+                      tooltip: 'Pick from calendar',
+                      icon: const Icon(Icons.calendar_month),
+                      onPressed: () => _pickDate(isProdDate: true),
+                    ),
+                  ],
+                ),
+              ),
+              keyboardType: TextInputType.number,
+              inputFormatters: [NzDateInputFormatter()],
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return null;
+                if (DateParser.parseTypedDate(v) == null) {
+                  return 'Enter a valid date as dd/mm/yyyy';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
               controller: _expiryCtrl,
               focusNode: _focusNodes['expiry'],
               decoration: InputDecoration(
@@ -462,7 +543,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                     IconButton(
                       tooltip: 'Pick from calendar',
                       icon: const Icon(Icons.calendar_month),
-                      onPressed: _pickDate,
+                      onPressed: () => _pickDate(isProdDate: false),
                     ),
                   ],
                 ),
@@ -610,6 +691,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     final found = <String>[
       if (scan.productName != null) 'product name',
       if (scan.brand != null) 'brand',
+      if (scan.barcodeId != null) 'barcode',
+      if (scan.prodDate != null) 'prod date',
       if (scan.expiryDate != null) 'expiry date',
       if (scan.batch != null) 'batch number',
       if (scan.category != null) 'category',
