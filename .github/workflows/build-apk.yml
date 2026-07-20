@@ -1,8 +1,8 @@
 name: Build Android APK
 
+# Manual only while testing — no automatic builds on push.
+# Trigger from Actions → Build Android APK → Run workflow when you want a new APK.
 on:
-  push:
-    branches: [main, "cursor/**"]
   workflow_dispatch:
 
 jobs:
