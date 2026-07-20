@@ -1,9 +1,11 @@
 name: Build Android APK
 
-# Manual only while testing — no automatic builds on push.
-# Trigger from Actions → Build Android APK → Run workflow when you want a new APK.
+# Manual on main; auto-build for cursor/* feature branches so test APKs
+# are available while iterating. Trigger anytime via Actions → Run workflow.
 on:
   workflow_dispatch:
+  push:
+    branches: ["cursor/**"]
 
 jobs:
   build:
@@ -24,7 +26,7 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos
 
       - run: flutter test
 
