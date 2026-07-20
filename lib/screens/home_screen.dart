@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,9 +7,9 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
-import '../services/ocr_service.dart';
 import '../services/user_service.dart';
 import '../utils/date_parser.dart';
+import '../utils/scan_helper.dart';
 import '../widgets/report_options_dialog.dart';
 import 'login_screen.dart';
 import 'product_form_screen.dart';
@@ -117,14 +116,8 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _scanWithCamera() async {
     setState(() => _scanning = true);
     try {
-      final picker = ImagePicker();
-      final photo = await picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 90,
-      );
-      if (photo == null) return;
-      final result = await OcrService.instance.scanImage(photo.path);
-      if (!mounted) return;
+      final result = await captureAndRecognize(context);
+      if (result == null || !mounted) return;
       await _openForm(scanResult: result);
     } catch (e) {
       _snack('Scan failed: $e');
@@ -448,6 +441,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (product.batch.isNotEmpty) 'Batch ${product.batch}',
       'Qty ${product.quantity}',
     ];
+    final addedParts = <String>[
+      'Added ${dateFmt.format(product.addedDate)}',
+      if (product.createdBy.isNotEmpty) 'by ${product.createdBy}',
+    ];
     return Dismissible(
       key: ValueKey(product.id),
       direction: DismissDirection.endToStart,
@@ -483,7 +480,10 @@ class _HomeScreenState extends State<HomeScreen> {
               style: const TextStyle(fontWeight: FontWeight.w600)),
           subtitle: Text(
             '${subtitleParts.join(' • ')}\n'
-            'Expires ${dateFmt.format(product.expiryDate)}',
+            'Expires ${dateFmt.format(product.expiryDate)} • '
+            '${addedParts.join(' ')}',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
           ),
           isThreeLine: true,
           trailing: Container(
