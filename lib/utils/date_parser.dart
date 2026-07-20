@@ -557,7 +557,7 @@ class DateParser {
       }
       // Stop joining once we already have a multi-word brand and the next
       // candidate is itself multi-word (likely the flavour line).
-      if (brandParts.length >= 1 &&
+      if (brandParts.isNotEmpty &&
           brandParts.join(' ').contains(' ') &&
           words.length >= 2) {
         break;
