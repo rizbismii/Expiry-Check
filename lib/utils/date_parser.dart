@@ -57,9 +57,10 @@ class DateParser {
 
   /// Explicit PRO/EXP (and OCR variants) followed by a compact date.
   /// Digits may include O/I/l/S substitutions from weak inkjet OCR.
+  /// Spaces/tabs only — never newlines, or PRO would swallow EXP digits.
   static final _labelledCompactDate = RegExp(
     r'\b(pr[o0]|mfg|mfd|exp|bbe?)\s*[:.\-]?\s*'
-    r'([0-9OIlZSBgqo\s]{6,16})',
+    r'([0-9OIlZSBgqo][0-9OIlZSBgqo \t]{5,15})',
     caseSensitive: false,
   );
 
@@ -68,6 +69,11 @@ class DateParser {
   static final _labelledNoisyDate = RegExp(
     r'(?<![A-Za-z])(pr[o0]|exp|mfg|mfd)\s*[:.\-]?\s*([0-9OIlZSBgqo]{6,12})',
     caseSensitive: false,
+  );
+
+  /// Retail barcode printed under the bars, e.g. "6 937035 203622".
+  static final _spacedBarcodeLine = RegExp(
+    r'^\s*(\d)\s+(\d{5,6})\s+(\d{5,6})\s*$',
   );
 
   static final _batchPattern = RegExp(
@@ -191,60 +197,82 @@ class DateParser {
       }
     }
 
-    // Explicit PRO:/EXP: compact dates — more reliable than free-floating
-    // 8-digit numbers when OCR of the keyword is weak but still present.
+    // Explicit PRO:/EXP: dates — these win over any heuristic.
+    DateTime? labelledExpiry;
+    DateTime? labelledProd;
     for (final pattern in [_labelledCompactDate, _labelledNoisyDate]) {
       for (final m in pattern.allMatches(text)) {
         final label = m.group(1)!.toLowerCase().replaceAll('0', 'o');
         final digits = _ocrNormalizeDigits(m.group(2)!);
-        final date = _parseCompactDigits(digits);
+        // Take only the first 8 (or 6) digits after the label — never the
+        // next line's digits if OCR glued lines together.
+        final date = _parseCompactDigits(_firstCompactDigitRun(digits));
         if (date == null) continue;
         final isExp =
             label.startsWith('exp') || label == 'bb' || label == 'bbe';
         candidates.add(_DateCandidate(date, isExp, !isExp));
+        if (isExp) {
+          labelledExpiry ??= date;
+        } else {
+          labelledProd ??= date;
+        }
       }
     }
 
-    // Sweep whole text for OCR-normalized 8-digit dates (O→0, etc.).
+    // Unlabeled compact dates are fallback only (never override PRO/EXP).
     for (final d in _noisyCompactDatesInText(text)) {
       candidates.add(_DateCandidate(d, false, false));
     }
 
-    DateTime? expiry;
-    if (candidates.isNotEmpty) {
-      // Prefer dates flagged by expiry keywords, then the latest future date.
+    DateTime? expiry = labelledExpiry;
+    DateTime? prodDate = labelledProd;
+
+    if (expiry == null) {
       final keyworded = candidates.where((c) => c.nearExpiryKeyword).toList();
       final pool = keyworded.isNotEmpty
           ? keyworded
           : candidates.where((c) => !c.onMfgLine).toList();
-      final usable = pool.isNotEmpty ? pool : candidates;
-      usable.sort((a, b) => b.date.compareTo(a.date));
-      expiry = usable.first.date;
+      if (pool.isNotEmpty) {
+        pool.sort((a, b) => b.date.compareTo(a.date));
+        expiry = pool.first.date;
+      }
     }
 
-    DateTime? prodDate;
-    final mfgDates = candidates.where((c) => c.onMfgLine).toList();
-    if (mfgDates.isNotEmpty) {
-      mfgDates.sort((a, b) => a.date.compareTo(b.date));
-      prodDate = mfgDates.first.date;
-      // Don't reuse the same calendar day as both prod and expiry.
-      if (expiry != null &&
-          prodDate.year == expiry.year &&
-          prodDate.month == expiry.month &&
-          prodDate.day == expiry.day) {
+    if (prodDate == null) {
+      final mfgDates = candidates.where((c) => c.onMfgLine).toList();
+      if (mfgDates.isNotEmpty) {
+        mfgDates.sort((a, b) => a.date.compareTo(b.date));
+        prodDate = mfgDates.first.date;
+      }
+    }
+
+    // Don't reuse the same calendar day as both prod and expiry.
+    if (expiry != null && prodDate != null && _sameDay(prodDate, expiry)) {
+      if (labelledExpiry != null && labelledProd == null) {
+        prodDate = null;
+      } else if (labelledProd != null && labelledExpiry == null) {
+        expiry = null;
+      } else if (labelledExpiry == null) {
         prodDate = null;
       }
     }
 
-    // Bottom-panel fallback: two compact dates near a barcode, earlier = prod,
-    // later = expiry (common when PRO/EXP keywords fail OCR).
+    // Bottom-panel fallback: two distinct compact dates, earlier = prod,
+    // later = expiry — only fills fields still missing.
     if (expiry == null || prodDate == null) {
-      final compactDates = <DateTime>[
-        ...candidates.map((c) => c.date),
-        ..._noisyCompactDatesInText(text),
-      ];
+      final compactDates = <DateTime>[];
+      for (final c in candidates) {
+        // Skip unlabeled noise when we already have one labelled date.
+        if (!c.nearExpiryKeyword &&
+            !c.onMfgLine &&
+            (labelledExpiry != null || labelledProd != null)) {
+          continue;
+        }
+        compactDates.add(c.date);
+      }
       for (final line in lines) {
         if (_licenceLine(line)) continue;
+        if (_isBarcodeOnlyLine(line)) continue;
         for (final m in _compact8Pattern.allMatches(line)) {
           final d = _parseCompactDigits(m.group(1)!);
           if (d != null) compactDates.add(d);
@@ -258,12 +286,7 @@ class DateParser {
       compactDates.sort((a, b) => a.compareTo(b));
       final unique = <DateTime>[];
       for (final d in compactDates) {
-        if (unique.isEmpty ||
-            unique.last.year != d.year ||
-            unique.last.month != d.month ||
-            unique.last.day != d.day) {
-          unique.add(d);
-        }
+        if (unique.isEmpty || !_sameDay(unique.last, d)) unique.add(d);
       }
       if (unique.length >= 2) {
         prodDate ??= unique.first;
@@ -271,6 +294,13 @@ class DateParser {
       } else if (unique.length == 1) {
         expiry ??= unique.first;
       }
+    }
+
+    // If both present but ordered backwards (OCR swapped PRO/EXP), swap.
+    if (prodDate != null && expiry != null && prodDate.isAfter(expiry)) {
+      final tmp = prodDate;
+      prodDate = expiry;
+      expiry = tmp;
     }
 
     final batchMatch = _batchPattern.firstMatch(text);
@@ -629,8 +659,29 @@ class DateParser {
   static bool _licenceLine(String line) =>
       RegExp(r'licen[cs]e', caseSensitive: false).hasMatch(line);
 
+  static bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// First 8 or 6 digit compact-date run from a normalized digit string.
+  static String _firstCompactDigitRun(String digits) {
+    if (digits.length >= 8) return digits.substring(0, 8);
+    if (digits.length >= 6) return digits.substring(0, 6);
+    return digits;
+  }
+
+  static bool _isBarcodeOnlyLine(String line) {
+    final spaced = _spacedBarcodeLine.firstMatch(line);
+    if (spaced != null) return true;
+    final digits = _ocrNormalizeDigits(line);
+    final nonSpace = line.replaceAll(RegExp(r'\s'), '');
+    final mostlyDigits = nonSpace.isNotEmpty &&
+        RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false).hasMatch(nonSpace);
+    return mostlyDigits && _isPlausibleBarcode(digits);
+  }
+
   /// Labelled barcode / EAN / UPC, including spaced digits printed under the
-  /// bars (e.g. "6 937035 203622"), skipping manufacture-licence numbers.
+  /// bars (e.g. "6 937035 203622"). Never slices digits out of the whole OCR
+  /// blob (that mixed dates + licence into fake barcodes).
   static String? _findBarcode(String text, List<String> lines) {
     final labelled = _barcodePattern.firstMatch(text);
     if (labelled != null) {
@@ -638,51 +689,100 @@ class DateParser {
       if (_isPlausibleBarcode(digits)) return digits;
     }
 
+    // Dedupe — OCR often repeats the same line via blocks/elements.
+    final uniqueLines = <String>[];
+    final seen = <String>{};
     for (final line in lines) {
+      final key = line.trim().toLowerCase();
+      if (key.isEmpty || !seen.add(key)) continue;
+      uniqueLines.add(line.trim());
+    }
+
+    String? best;
+    var bestScore = -1;
+    for (var i = 0; i < uniqueLines.length; i++) {
+      final line = uniqueLines[i];
       if (_expiryKeywords.hasMatch(line) ||
           _mfgKeywords.hasMatch(line) ||
           _batchPattern.hasMatch(line) ||
-          _licenceLine(line)) {
+          _licenceLine(line) ||
+          _alyBatchPattern.hasMatch(line)) {
         continue;
       }
-      final digits = _ocrNormalizeDigits(line);
-      // Whole line is (mostly) a barcode number, possibly with spaces.
-      final nonSpace = line.replaceAll(RegExp(r'\s'), '');
-      final mostlyDigits = nonSpace.isNotEmpty &&
-          RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false)
-              .hasMatch(nonSpace);
-      if (mostlyDigits && _isPlausibleBarcode(digits)) return digits;
 
-      final m = RegExp(r'\b(\d{8}|\d{12,14})\b').firstMatch(line);
-      if (m == null) continue;
-      final compact = m.group(1)!;
-      if (_looksLikeCompactDate(compact)) continue;
-      if (_isPlausibleBarcode(compact)) return compact;
-    }
+      String? digits;
+      var score = 0;
 
-    // Last resort: longest 12–14 digit run in the whole OCR blob.
-    final allDigits = _ocrNormalizeDigits(text);
-    for (final len in [13, 12, 14, 8]) {
-      for (var i = 0; i + len <= allDigits.length; i++) {
-        final slice = allDigits.substring(i, i + len);
-        if (_looksLikeCompactDate(slice)) continue;
-        // Skip manufacture licence-looking 10-digit embeds by requiring
-        // exact barcode lengths only.
-        if (_isPlausibleBarcode(slice) && slice.length != 10) return slice;
+      final spaced = _spacedBarcodeLine.firstMatch(line);
+      if (spaced != null) {
+        digits = '${spaced.group(1)}${spaced.group(2)}${spaced.group(3)}';
+        score += 50; // classic under-bars layout
+      } else {
+        final normalized = _ocrNormalizeDigits(line);
+        final nonSpace = line.replaceAll(RegExp(r'\s'), '');
+        final mostlyDigits = nonSpace.isNotEmpty &&
+            RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false)
+                .hasMatch(nonSpace);
+        if (mostlyDigits && _isPlausibleBarcode(normalized)) {
+          digits = normalized;
+          score += 20;
+        } else {
+          final m = RegExp(r'\b(\d{12,14})\b').firstMatch(line);
+          if (m != null) {
+            digits = m.group(1);
+            score += 10;
+          }
+        }
+      }
+
+      if (digits == null || !_isPlausibleBarcode(digits)) continue;
+      if (_looksLikeCompactDate(digits)) continue;
+      // Manufacture licence numbers are typically 10 digits.
+      if (digits.length == 10) continue;
+
+      if (digits.length == 13) score += 15;
+      if (digits.length == 12) score += 10;
+      if (_hasValidEanCheckDigit(digits)) score += 25;
+
+      // Prefer the digit line that sits just above PRO/EXP on the panel.
+      final nearDate = [i + 1, i + 2, i - 1].any((j) =>
+          j >= 0 &&
+          j < uniqueLines.length &&
+          (_expiryKeywords.hasMatch(uniqueLines[j]) ||
+              _mfgKeywords.hasMatch(uniqueLines[j])));
+      if (nearDate) score += 20;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = digits;
       }
     }
-    return null;
+    return best;
   }
 
+  /// Retail barcodes are 12–14 digits. 8-digit values are almost always dates.
   static bool _isPlausibleBarcode(String digits) =>
-      digits.length == 8 ||
-      digits.length == 12 ||
-      digits.length == 13 ||
-      digits.length == 14;
+      digits.length == 12 || digits.length == 13 || digits.length == 14;
 
   static bool _looksLikeCompactDate(String digits) {
-    if (digits.length != 8) return false;
-    return _parseCompactDigits(digits) != null;
+    if (digits.length == 8) return _parseCompactDigits(digits) != null;
+    // 13-digit barcodes can contain 8-digit date-like substrings — only
+    // reject when the *whole* value is an 8-digit date.
+    return false;
+  }
+
+  /// GS1 check digit for UPC-A (12) / EAN-13 (13). Returns false for other
+  /// lengths so they can still win on layout score alone.
+  static bool _hasValidEanCheckDigit(String digits) {
+    if (digits.length != 12 && digits.length != 13) return false;
+    var sum = 0;
+    for (var i = 0; i < digits.length - 1; i++) {
+      final n = int.parse(digits[i]);
+      final fromRight = digits.length - 1 - i;
+      sum += fromRight.isOdd ? n * 3 : n;
+    }
+    final check = (10 - (sum % 10)) % 10;
+    return check == int.parse(digits[digits.length - 1]);
   }
 
   static String? _alyBatch(List<String> lines) {

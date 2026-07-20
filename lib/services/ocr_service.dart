@@ -63,26 +63,21 @@ class OcrService {
     }
   }
 
-  /// Prefer structured lines (better word breaks than [RecognizedText.text]
-  /// alone), and also append element-joined lines for logos split into glyphs.
+  /// Prefer structured ML Kit lines (stable word breaks). Fall back to the
+  /// raw block text only when no lines were returned. Avoid dumping raw text
+  /// *and* every line/element — that glued dates into fake barcodes.
   static String _textFromRecognized(RecognizedText recognized) {
     final lines = <String>[];
-    final elementLines = <String>[];
+    final seen = <String>{};
     for (final block in recognized.blocks) {
       for (final line in block.lines) {
         final t = line.text.trim();
-        if (t.isNotEmpty) lines.add(t);
-        final elems = line.elements.map((e) => e.text.trim()).where((e) => e.isNotEmpty);
-        final joined = elems.join(' ').trim();
-        if (joined.isNotEmpty) elementLines.add(joined);
+        if (t.isEmpty) continue;
+        if (seen.add(t.toLowerCase())) lines.add(t);
       }
     }
-    final parts = <String>[
-      if (recognized.text.trim().isNotEmpty) recognized.text.trim(),
-      ...lines,
-      ...elementLines,
-    ];
-    return parts.join('\n');
+    if (lines.isNotEmpty) return lines.join('\n');
+    return recognized.text.trim();
   }
 
   /// Grayscale + contrast stretch + mild sharpen — improves ML Kit reads of
