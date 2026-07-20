@@ -54,9 +54,11 @@ void main() {
         storeId: 2,
         name: 'Shampoo',
         brand: 'CleanCo',
+        barcodeId: '9421901234567',
         batch: 'LOT99',
         category: 'Salt Liquids',
         quantity: 3,
+        prodDate: DateTime(2026, 1, 10),
         expiryDate: DateTime(2027, 3, 15),
         addedDate: DateTime(2026, 7, 1),
         notes: 'bathroom shelf',
@@ -66,9 +68,11 @@ void main() {
       expect(restored.storeId, 2);
       expect(restored.name, 'Shampoo');
       expect(restored.brand, 'CleanCo');
+      expect(restored.barcodeId, '9421901234567');
       expect(restored.batch, 'LOT99');
       expect(restored.category, 'Salt Liquids');
       expect(restored.quantity, 3);
+      expect(restored.prodDate, DateTime(2026, 1, 10));
       expect(restored.expiryDate, DateTime(2027, 3, 15));
       expect(restored.notes, 'bathroom shelf');
     });
@@ -81,6 +85,19 @@ void main() {
       ).toMap()
         ..remove('storeId');
       expect(Product.fromMap(map).storeId, 1);
+    });
+
+    test('barcodeId and prodDate default empty/null for legacy maps', () {
+      final map = Product(
+        name: 'Legacy',
+        expiryDate: DateTime(2027, 1, 1),
+        addedDate: DateTime(2026, 1, 1),
+      ).toMap()
+        ..remove('barcodeId')
+        ..remove('prodDate');
+      final restored = Product.fromMap(map);
+      expect(restored.barcodeId, '');
+      expect(restored.prodDate, isNull);
     });
   });
 }

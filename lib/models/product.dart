@@ -3,9 +3,11 @@ class Product {
   final int storeId;
   final String name;
   final String brand;
+  final String barcodeId;
   final String batch;
   final String category;
   final int quantity;
+  final DateTime? prodDate;
   final DateTime expiryDate;
   final DateTime addedDate;
   final String notes;
@@ -16,9 +18,11 @@ class Product {
     this.storeId = 1,
     required this.name,
     this.brand = '',
+    this.barcodeId = '',
     this.batch = '',
     this.category = 'General',
     this.quantity = 1,
+    this.prodDate,
     required this.expiryDate,
     required this.addedDate,
     this.notes = '',
@@ -53,9 +57,12 @@ class Product {
     int? storeId,
     String? name,
     String? brand,
+    String? barcodeId,
     String? batch,
     String? category,
     int? quantity,
+    DateTime? prodDate,
+    bool clearProdDate = false,
     DateTime? expiryDate,
     DateTime? addedDate,
     String? notes,
@@ -66,9 +73,11 @@ class Product {
       storeId: storeId ?? this.storeId,
       name: name ?? this.name,
       brand: brand ?? this.brand,
+      barcodeId: barcodeId ?? this.barcodeId,
       batch: batch ?? this.batch,
       category: category ?? this.category,
       quantity: quantity ?? this.quantity,
+      prodDate: clearProdDate ? null : (prodDate ?? this.prodDate),
       expiryDate: expiryDate ?? this.expiryDate,
       addedDate: addedDate ?? this.addedDate,
       notes: notes ?? this.notes,
@@ -82,9 +91,11 @@ class Product {
       'storeId': storeId,
       'name': name,
       'brand': brand,
+      'barcodeId': barcodeId,
       'batch': batch,
       'category': category,
       'quantity': quantity,
+      'prodDate': prodDate?.toIso8601String(),
       'expiryDate': expiryDate.toIso8601String(),
       'addedDate': addedDate.toIso8601String(),
       'notes': notes,
@@ -93,14 +104,19 @@ class Product {
   }
 
   factory Product.fromMap(Map<String, dynamic> map) {
+    final prodRaw = map['prodDate'];
     return Product(
       id: map['id'] as int?,
       storeId: map['storeId'] as int? ?? 1,
       name: map['name'] as String? ?? '',
       brand: map['brand'] as String? ?? '',
+      barcodeId: map['barcodeId'] as String? ?? '',
       batch: map['batch'] as String? ?? '',
       category: map['category'] as String? ?? 'General',
       quantity: map['quantity'] as int? ?? 1,
+      prodDate: prodRaw is String && prodRaw.isNotEmpty
+          ? DateTime.tryParse(prodRaw)
+          : null,
       expiryDate: DateTime.parse(map['expiryDate'] as String),
       addedDate: DateTime.parse(map['addedDate'] as String),
       notes: map['notes'] as String? ?? '',

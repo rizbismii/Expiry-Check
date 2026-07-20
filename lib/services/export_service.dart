@@ -107,6 +107,8 @@ class ExportService {
       if (storeNames != null) 'Store',
       'Brand Name',
       'Product Name',
+      'Barcode ID',
+      'Prod Date',
       'Expiry Date',
       'Batch / Lot No.',
       'Category',
@@ -132,6 +134,9 @@ class ExportService {
           TextCellValue(storeNames[p.storeId] ?? 'Store ${p.storeId}'),
         TextCellValue(p.brand),
         TextCellValue(p.name),
+        TextCellValue(p.barcodeId),
+        TextCellValue(
+            p.prodDate == null ? '' : _dateFmt.format(p.prodDate!)),
         TextCellValue(_dateFmt.format(p.expiryDate)),
         TextCellValue(p.batch),
         TextCellValue(p.category),
