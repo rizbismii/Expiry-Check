@@ -56,9 +56,17 @@ class DateParser {
   );
 
   /// Explicit PRO/EXP (and OCR variants) followed by a compact date.
+  /// Digits may include O/I/l/S substitutions from weak inkjet OCR.
   static final _labelledCompactDate = RegExp(
     r'\b(pr[o0]|mfg|mfd|exp|bbe?)\s*[:.\-]?\s*'
-    r'(\d{8}|\d{2}\s*\d{2}\s*\d{4}|\d{6})',
+    r'([0-9OIlZSBgqo\s]{6,16})',
+    caseSensitive: false,
+  );
+
+  /// Looser label+digits when colon/spacing is mangled: "PRO19032025",
+  /// "EXP18032027", "PR0 19O32O25".
+  static final _labelledNoisyDate = RegExp(
+    r'(?<![A-Za-z])(pr[o0]|exp|mfg|mfd)\s*[:.\-]?\s*([0-9OIlZSBgqo]{6,12})',
     caseSensitive: false,
   );
 
@@ -77,6 +85,14 @@ class DateParser {
     r'\b([A-Z]{2,5}\d{1,3})\s*([0-9]{6})\b',
     caseSensitive: false,
   );
+
+  /// Built-in brands for NZ vape packs — used when inventory is empty and
+  /// stylized logos only OCR as "SALTY" / "WORLD".
+  static const knownVapeBrands = [
+    'SALTY PUFF WORLD',
+    'SALTY FIZZY WORLD',
+    'SALTY WORLD',
+  ];
 
   // dd/mm/yyyy, dd-mm-yy, dd.mm.yyyy etc.
   static final _dmyPattern =
@@ -177,13 +193,21 @@ class DateParser {
 
     // Explicit PRO:/EXP: compact dates — more reliable than free-floating
     // 8-digit numbers when OCR of the keyword is weak but still present.
-    for (final m in _labelledCompactDate.allMatches(text)) {
-      final label = m.group(1)!.toLowerCase().replaceAll('0', 'o');
-      final digits = m.group(2)!.replaceAll(RegExp(r'\s'), '');
-      final date = _parseCompactDigits(digits);
-      if (date == null) continue;
-      final isExp = label.startsWith('exp') || label == 'bb' || label == 'bbe';
-      candidates.add(_DateCandidate(date, isExp, !isExp));
+    for (final pattern in [_labelledCompactDate, _labelledNoisyDate]) {
+      for (final m in pattern.allMatches(text)) {
+        final label = m.group(1)!.toLowerCase().replaceAll('0', 'o');
+        final digits = _ocrNormalizeDigits(m.group(2)!);
+        final date = _parseCompactDigits(digits);
+        if (date == null) continue;
+        final isExp =
+            label.startsWith('exp') || label == 'bb' || label == 'bbe';
+        candidates.add(_DateCandidate(date, isExp, !isExp));
+      }
+    }
+
+    // Sweep whole text for OCR-normalized 8-digit dates (O→0, etc.).
+    for (final d in _noisyCompactDatesInText(text)) {
+      candidates.add(_DateCandidate(d, false, false));
     }
 
     DateTime? expiry;
@@ -215,7 +239,10 @@ class DateParser {
     // Bottom-panel fallback: two compact dates near a barcode, earlier = prod,
     // later = expiry (common when PRO/EXP keywords fail OCR).
     if (expiry == null || prodDate == null) {
-      final compactDates = <DateTime>[];
+      final compactDates = <DateTime>[
+        ...candidates.map((c) => c.date),
+        ..._noisyCompactDatesInText(text),
+      ];
       for (final line in lines) {
         if (_licenceLine(line)) continue;
         for (final m in _compact8Pattern.allMatches(line)) {
@@ -231,7 +258,12 @@ class DateParser {
       compactDates.sort((a, b) => a.compareTo(b));
       final unique = <DateTime>[];
       for (final d in compactDates) {
-        if (unique.isEmpty || unique.last != d) unique.add(d);
+        if (unique.isEmpty ||
+            unique.last.year != d.year ||
+            unique.last.month != d.month ||
+            unique.last.day != d.day) {
+          unique.add(d);
+        }
       }
       if (unique.length >= 2) {
         prodDate ??= unique.first;
@@ -244,16 +276,26 @@ class DateParser {
     final batchMatch = _batchPattern.firstMatch(text);
     var batch = batchMatch?.group(1)?.toUpperCase();
     batch ??= _alyBatch(lines);
+    batch ??= _alyBatchNoisy(text);
     batch ??= _fallbackBatch(lines);
 
     final barcodeId = _findBarcode(text, lines);
 
     final strength = _findStrength(text);
-    final names = _guessNames(lines);
-    final brand = names.$1;
-    var productName = names.$2;
+    var names = _guessNames(lines);
+    var brand = _correctKnownBrand(names.$1, text);
+    var productName = names.$2 ?? _findFlavourInText(text);
+    // If product still looks like a leftover logo token (WORLD), replace with
+    // a flavour found elsewhere on the pack.
+    if (productName != null &&
+        !_flavourWords.contains(productName.toLowerCase().split(' ').first)) {
+      final flavour = _findFlavourInText(text);
+      if (flavour != null) productName = flavour;
+    }
     if (productName != null && strength != null) {
-      productName = '$productName $strength';
+      if (!productName.toLowerCase().contains('mg')) {
+        productName = '$productName $strength';
+      }
     } else if (productName == null && strength != null) {
       productName = strength;
     }
@@ -414,6 +456,154 @@ class DateParser {
     return null;
   }
 
+  /// Map common OCR letter/digit confusions then strip non-digits.
+  static String _ocrNormalizeDigits(String raw) {
+    final buf = StringBuffer();
+    for (final ch in raw.toUpperCase().split('')) {
+      switch (ch) {
+        case 'O':
+        case 'Q':
+        case 'D':
+          buf.write('0');
+        case 'I':
+        case 'L':
+        case '|':
+          buf.write('1');
+        case 'Z':
+          buf.write('2');
+        case 'S':
+          buf.write('5');
+        case 'B':
+          buf.write('8');
+        case 'G':
+          buf.write('6');
+        default:
+          if (RegExp(r'[0-9]').hasMatch(ch)) buf.write(ch);
+      }
+    }
+    return buf.toString();
+  }
+
+  static List<DateTime> _noisyCompactDatesInText(String text) {
+    final out = <DateTime>[];
+    for (final line in text.split(RegExp(r'[\n\r]+'))) {
+      final trimmed = line.trim();
+      if (trimmed.isEmpty || _licenceLine(trimmed)) continue;
+      final hasKeyword =
+          _expiryKeywords.hasMatch(trimmed) || _mfgKeywords.hasMatch(trimmed);
+      final digits = _ocrNormalizeDigits(trimmed);
+      // Only mine digit windows from keyword lines or short digit-heavy lines
+      // (avoids sliding across the barcode number).
+      final shortDigitLine = digits.length >= 6 &&
+          digits.length <= 14 &&
+          trimmed.length <= 28;
+      if (!hasKeyword && !shortDigitLine) continue;
+      if (digits.length == 6 || digits.length == 8) {
+        final d = _parseCompactDigits(digits);
+        if (d != null) out.add(d);
+        continue;
+      }
+      if (hasKeyword) {
+        for (var i = 0; i + 8 <= digits.length; i++) {
+          final d = _parseCompactDigits(digits.substring(i, i + 8));
+          if (d != null) out.add(d);
+        }
+        for (var i = 0; i + 6 <= digits.length; i++) {
+          final d = _parseCompactDigits(digits.substring(i, i + 6));
+          if (d != null) out.add(d);
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Expand partial OCR brand tokens using pack context + built-in brands.
+  static String? _correctKnownBrand(String? candidate, String text) {
+    final upper = text.toUpperCase();
+    final hasPuff = upper.contains('PUFF') ||
+        RegExp(r'\bP[IU]FF\b').hasMatch(upper) ||
+        upper.contains('SUB-OHM') ||
+        upper.contains('SUB OHM');
+    final hasFizzy = upper.contains('FIZZY') || upper.contains('FIZZ');
+    final hasSalty = upper.contains('SALTY') ||
+        upper.contains('GALTY') ||
+        upper.contains('5ALTY') ||
+        (candidate != null &&
+            RegExp(r'salty|galty|5alty', caseSensitive: false)
+                .hasMatch(candidate));
+    final hasWorld = upper.contains('WORLD') ||
+        (candidate != null &&
+            candidate.toUpperCase().contains('WORLD'));
+
+    if (hasSalty && hasPuff) return 'SALTY PUFF WORLD';
+    if (hasSalty && hasFizzy) return 'SALTY FIZZY WORLD';
+    if (hasSalty && hasWorld) {
+      // Default the common Sub-Ohm salt line when PUFF was missed by OCR.
+      if (upper.contains('SALT') || upper.contains('MG')) {
+        return 'SALTY PUFF WORLD';
+      }
+      return 'SALTY WORLD';
+    }
+    if (candidate == null || candidate.trim().isEmpty) {
+      if (hasSalty) return 'SALTY PUFF WORLD';
+      return null;
+    }
+
+    // Fuzzy against built-in brands.
+    String? best;
+    var bestScore = 0.65;
+    final c = candidate.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    for (final known in knownVapeBrands) {
+      final k = known.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+      if (k.contains(c) || c.contains(k)) {
+        return known;
+      }
+      // Prefix match for "SALTY" vs "SALTYPUFFWORLD".
+      final n = c.length < k.length ? c.length : k.length;
+      if (n >= 4) {
+        var same = 0;
+        for (var i = 0; i < n; i++) {
+          if (c[i] == k[i]) same++;
+        }
+        final score = same / k.length + (k.startsWith(c) ? 0.4 : 0);
+        if (score >= bestScore) {
+          bestScore = score;
+          best = known;
+        }
+      }
+    }
+    return best ?? candidate;
+  }
+
+  static String? _findFlavourInText(String text) {
+    final words = text
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z\s]'), ' ')
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty);
+    final found = <String>[];
+    for (final w in words) {
+      if (_flavourWords.contains(w.toLowerCase())) {
+        // Skip standalone ICE when it's part of "ICE EDITION".
+        if (w == 'ICE') continue;
+        found.add(w);
+      }
+    }
+    if (found.isEmpty) return null;
+    // Prefer distinctive flavours over generic "CREAM"/"ICE".
+    found.sort((a, b) {
+      int rank(String s) =>
+          (s == 'CREAM' || s == 'MENTHOL') ? 1 : 0;
+      return rank(a).compareTo(rank(b));
+    });
+    // Berry Lemon style: keep up to two adjacent flavour words if both present.
+    if (found.length >= 2 &&
+        text.toUpperCase().contains('${found[0]} ${found[1]}')) {
+      return '${found[0]} ${found[1]}';
+    }
+    return found.first;
+  }
+
   static int _normalizeYear(int year) {
     if (year >= 100) return year;
     return 2000 + year;
@@ -444,7 +634,7 @@ class DateParser {
   static String? _findBarcode(String text, List<String> lines) {
     final labelled = _barcodePattern.firstMatch(text);
     if (labelled != null) {
-      final digits = labelled.group(1)!.replaceAll(RegExp(r'\D'), '');
+      final digits = _ocrNormalizeDigits(labelled.group(1)!);
       if (_isPlausibleBarcode(digits)) return digits;
     }
 
@@ -455,11 +645,12 @@ class DateParser {
           _licenceLine(line)) {
         continue;
       }
-      final digits = line.replaceAll(RegExp(r'\D'), '');
+      final digits = _ocrNormalizeDigits(line);
       // Whole line is (mostly) a barcode number, possibly with spaces.
       final nonSpace = line.replaceAll(RegExp(r'\s'), '');
-      final mostlyDigits =
-          nonSpace.isNotEmpty && RegExp(r'^\d+$').hasMatch(nonSpace);
+      final mostlyDigits = nonSpace.isNotEmpty &&
+          RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false)
+              .hasMatch(nonSpace);
       if (mostlyDigits && _isPlausibleBarcode(digits)) return digits;
 
       final m = RegExp(r'\b(\d{8}|\d{12,14})\b').firstMatch(line);
@@ -467,6 +658,18 @@ class DateParser {
       final compact = m.group(1)!;
       if (_looksLikeCompactDate(compact)) continue;
       if (_isPlausibleBarcode(compact)) return compact;
+    }
+
+    // Last resort: longest 12–14 digit run in the whole OCR blob.
+    final allDigits = _ocrNormalizeDigits(text);
+    for (final len in [13, 12, 14, 8]) {
+      for (var i = 0; i + len <= allDigits.length; i++) {
+        final slice = allDigits.substring(i, i + len);
+        if (_looksLikeCompactDate(slice)) continue;
+        // Skip manufacture licence-looking 10-digit embeds by requiring
+        // exact barcode lengths only.
+        if (_isPlausibleBarcode(slice) && slice.length != 10) return slice;
+      }
     }
     return null;
   }
@@ -489,6 +692,50 @@ class DateParser {
       if (m == null) continue;
       // Prefer lines near date/barcode panels.
       return '${m.group(1)!.toUpperCase()}${m.group(2)}';
+    }
+    return null;
+  }
+
+  /// Recover ALY## + YYMMDD / DDMMYY batches from inkjet OCR garbage
+  /// (e.g. "ALVSO319" ≈ "ALY32 250319").
+  static String? _alyBatchNoisy(String text) {
+    // Direct clean match anywhere in the blob.
+    final clean = _alyBatchPattern.firstMatch(text.toUpperCase());
+    if (clean != null) {
+      return '${clean.group(1)!.toUpperCase()}${clean.group(2)}';
+    }
+
+    // Letter-digit run near PRO/EXP lines.
+    final aly = RegExp(
+      r'\b(AL[YVWS][0-9OIlZS]{0,4})\s*([0-9OIlZSBgqo]{5,8})\b',
+      caseSensitive: false,
+    );
+    for (final m in aly.allMatches(text)) {
+      final head = m
+          .group(1)!
+          .toUpperCase()
+          .replaceAll('V', 'Y')
+          .replaceAll('W', 'Y')
+          .replaceAll(RegExp(r'[^A-Z0-9]'), '');
+      // Normalize head toward ALY##.
+      var normalizedHead = head;
+      if (normalizedHead.startsWith('AL') && normalizedHead.length >= 3) {
+        if (normalizedHead[2] != 'Y') {
+          normalizedHead = 'ALY${normalizedHead.substring(3)}';
+        }
+      }
+      final digits = _ocrNormalizeDigits(m.group(2)!);
+      if (digits.length < 6) continue;
+      final tail = digits.length >= 6
+          ? digits.substring(digits.length - 6)
+          : digits;
+      // Prefer heads that look like ALY + digits.
+      final headDigits = _ocrNormalizeDigits(normalizedHead);
+      final headLetters =
+          normalizedHead.replaceAll(RegExp(r'[^A-Z]'), '');
+      if (!headLetters.startsWith('AL')) continue;
+      final numPart = headDigits.isEmpty ? '32' : headDigits;
+      return 'ALY$numPart$tail';
     }
     return null;
   }

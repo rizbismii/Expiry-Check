@@ -274,5 +274,32 @@ Manufacture licence number: 4144030056
       expect(r.expiryDate, DateTime(2027, 3, 18));
       expect(r.batch, 'ALY32250319');
     });
+
+    test('Salty Puff World — real device OCR noise (user report)', () {
+      // Matches the failed on-device scan: logo split, BERRY missed on first
+      // pass but present in warning-adjacent text, inkjet PRO/EXP with O/I
+      // confusions, batch mangled toward ALVSO319.
+      const label = '''
+SALTY
+WORLD
+10 mg/mL
+SUB OHM SALT SERIES
+BERRY
+THIS PRODUCT CONTAINS NICOTINE
+6 937035 203622
+PR0: I9O32O25
+EXP: I8O32O27
+ALVSO319
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.brand, 'SALTY PUFF WORLD');
+      expect(r.productName, 'BERRY 10 mg/mL');
+      expect(r.barcodeId, '6937035203622');
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+      expect(r.batch, 'ALY32250319');
+    });
   });
 }

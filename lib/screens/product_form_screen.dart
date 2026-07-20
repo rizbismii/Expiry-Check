@@ -238,22 +238,24 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       final result = await captureAndRecognize(context);
       if (result == null || !mounted) return;
       setState(() {
+        // Always apply recognized values from a fresh scan (overwrite weak
+        // first-pass guesses like Brand=SALTY / Product=WORLD).
         if (result.expiryDate != null) {
           _expiryCtrl.text = _nzDateFmt.format(result.expiryDate!);
         }
-        if (result.prodDate != null && _prodDateCtrl.text.isEmpty) {
+        if (result.prodDate != null) {
           _prodDateCtrl.text = _nzDateFmt.format(result.prodDate!);
         }
-        if (result.barcodeId != null && _barcodeCtrl.text.isEmpty) {
+        if (result.barcodeId != null && result.barcodeId!.isNotEmpty) {
           _barcodeCtrl.text = result.barcodeId!;
         }
-        if (result.batch != null && _batchCtrl.text.isEmpty) {
+        if (result.batch != null && result.batch!.isNotEmpty) {
           _batchCtrl.text = BatchInputFormatter.normalize(result.batch!);
         }
-        if (result.brand != null && _brandCtrl.text.isEmpty) {
+        if (result.brand != null && result.brand!.isNotEmpty) {
           _brandCtrl.text = result.brand!;
         }
-        if (result.productName != null && _nameCtrl.text.isEmpty) {
+        if (result.productName != null && result.productName!.isNotEmpty) {
           _nameCtrl.text = result.productName!;
         }
         if (result.category != null) _category = result.category!;
