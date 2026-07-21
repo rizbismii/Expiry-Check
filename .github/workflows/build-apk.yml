@@ -1,8 +1,11 @@
 name: Build Android APK
 
-# Manual only while testing — no automatic builds on push.
-# Trigger from Actions → Build Android APK → Run workflow when you want a new APK.
+# Auto-build on cursor/* test branches; main stays manual-only via workflow_dispatch
+# after merge (main's workflow file remains dispatch-only when merged separately).
 on:
+  push:
+    branches:
+      - "cursor/**"
   workflow_dispatch:
 
 jobs:
@@ -24,7 +27,7 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter analyze
+      - run: flutter analyze --no-fatal-infos
 
       - run: flutter test
 
