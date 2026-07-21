@@ -1,6 +1,6 @@
 -- Expiry Check — Supabase schema for live multi-device sync
--- Run this in the Supabase SQL Editor (Project → SQL → New query).
--- Then enable Replication for `products` (Database → Replication → supabase_realtime).
+-- Run this whole file once in: Project → SQL → New query → Run.
+-- Safe to re-run (idempotent).
 
 -- Products (stable UUID identity across devices)
 create table if not exists public.products (
@@ -53,7 +53,11 @@ alter table public.products enable row level security;
 alter table public.stores enable row level security;
 alter table public.deletion_log enable row level security;
 
--- Each shop sync account only sees its own rows.
+-- Recreate policies so re-runs do not fail with "already exists".
+drop policy if exists "products_select_own" on public.products;
+drop policy if exists "products_insert_own" on public.products;
+drop policy if exists "products_update_own" on public.products;
+drop policy if exists "products_delete_own" on public.products;
 create policy "products_select_own" on public.products
   for select using (auth.uid() = user_id);
 create policy "products_insert_own" on public.products
@@ -63,6 +67,10 @@ create policy "products_update_own" on public.products
 create policy "products_delete_own" on public.products
   for delete using (auth.uid() = user_id);
 
+drop policy if exists "stores_select_own" on public.stores;
+drop policy if exists "stores_insert_own" on public.stores;
+drop policy if exists "stores_update_own" on public.stores;
+drop policy if exists "stores_delete_own" on public.stores;
 create policy "stores_select_own" on public.stores
   for select using (auth.uid() = user_id);
 create policy "stores_insert_own" on public.stores
@@ -72,20 +80,41 @@ create policy "stores_update_own" on public.stores
 create policy "stores_delete_own" on public.stores
   for delete using (auth.uid() = user_id);
 
+drop policy if exists "deletion_log_select_own" on public.deletion_log;
+drop policy if exists "deletion_log_insert_own" on public.deletion_log;
 create policy "deletion_log_select_own" on public.deletion_log
   for select using (auth.uid() = user_id);
 create policy "deletion_log_insert_own" on public.deletion_log
   for insert with check (auth.uid() = user_id);
 
--- Realtime: add tables to the supabase_realtime publication (idempotent).
+-- Needed so Realtime can send old row data on UPDATE/DELETE.
+alter table public.products replica identity full;
+alter table public.stores replica identity full;
+
+-- Add tables to Realtime only if not already members.
 do $$
 begin
-  begin
-    alter publication supabase_realtime add table public.products;
-  exception when duplicate_object then null;
-  end;
-  begin
-    alter publication supabase_realtime add table public.stores;
-  exception when duplicate_object then null;
-  end;
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'products'
+  ) then
+    execute 'alter publication supabase_realtime add table public.products';
+  end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'stores'
+  ) then
+    execute 'alter publication supabase_realtime add table public.stores';
+  end if;
+exception
+  when others then
+    -- Some projects block ALTER PUBLICATION from the SQL editor.
+    -- If this fails, enable Realtime manually:
+    -- Database → Publications → supabase_realtime → toggle products + stores.
+    raise notice 'Realtime publication step skipped: %', sqlerrm;
 end $$;
