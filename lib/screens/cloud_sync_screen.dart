@@ -134,11 +134,14 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                   const SizedBox(height: 8),
                   const Text(
                     '1. Create a free project at supabase.com\n'
-                    '2. Run supabase/schema.sql in the SQL Editor\n'
-                    '3. Paste Project URL + anon public key below\n'
-                    '4. Create one shared shop email/password and sign in '
+                    '2. Paste supabase/schema.sql into the SQL Editor and Run '
+                    '(safe to re-run if it errored before)\n'
+                    '3. If needed, enable Realtime for products + stores under '
+                    'Database → Publications → supabase_realtime\n'
+                    '4. Paste Project URL + anon public key below\n'
+                    '5. Create one shared shop email/password and sign in '
                     'on every device with those same credentials\n'
-                    '5. Inventory then syncs live across devices',
+                    '6. Inventory then syncs live across devices',
                     style: TextStyle(height: 1.4),
                   ),
                 ],

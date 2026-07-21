@@ -33,10 +33,11 @@ Data is stored **on-device in SQLite** by default — works offline and stays pr
 For **live multi-device sync**, enable Supabase in **Settings → Cloud sync**:
 
 1. Create a free project at [supabase.com](https://supabase.com)
-2. In the SQL Editor, run [`supabase/schema.sql`](supabase/schema.sql)
-3. Copy **Project URL** and **anon public key** (Project Settings → API) into the app
-4. Create one shared shop email/password and **sign in on every device with the same credentials**
-5. Use **Push now** / **Pull now**, or just keep working — Realtime keeps products in sync
+2. In the SQL Editor, paste and run the full contents of [`supabase/schema.sql`](supabase/schema.sql) (safe to re-run)
+3. If the editor warns about Realtime publication, turn on **products** and **stores** under **Database → Publications → supabase_realtime**
+4. Copy **Project URL** and **anon public key** (Project Settings → API) into the app
+5. Create one shared shop email/password and **sign in on every device with the same credentials**
+6. Use **Push now** / **Pull now**, or just keep working — Realtime keeps products in sync
 
 Staff usernames in the app (admin / local users) stay separate from the Supabase sync login. The sync account is only for cloud transport.
 
