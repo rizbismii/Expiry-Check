@@ -274,5 +274,78 @@ Manufacture licence number: 4144030056
       expect(r.expiryDate, DateTime(2027, 3, 18));
       expect(r.batch, 'ALY32250319');
     });
+
+    test('Salty Puff World — real device OCR noise (user report)', () {
+      // Matches the failed on-device scan: logo split, BERRY missed on first
+      // pass but present in warning-adjacent text, inkjet PRO/EXP with O/I
+      // confusions, batch mangled toward ALVSO319.
+      const label = '''
+SALTY
+WORLD
+10 mg/mL
+SUB OHM SALT SERIES
+BERRY
+THIS PRODUCT CONTAINS NICOTINE
+6 937035 203622
+PR0: I9O32O25
+EXP: I8O32O27
+ALVSO319
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.brand, 'SALTY PUFF WORLD');
+      expect(r.productName, 'BERRY 10 mg/mL');
+      expect(r.barcodeId, '6937035203622');
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+      expect(r.batch, 'ALY32250319');
+    });
+
+    test('barcode is the spaced under-bars number, not licence or dates', () {
+      const label = '''
+SALTY PUFF WORLD
+BERRY
+10 mg/mL
+6 937035 203622
+PRO: 19032025
+EXP: 18032027
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.barcodeId, '6937035203622');
+      expect(r.barcodeId, isNot(contains('4144030056')));
+      expect(r.barcodeId, isNot('1903202518032027'));
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+    });
+
+    test('labelled EXP wins over later unlabeled compact date noise', () {
+      const label = '''
+Brand X
+Flavour
+PRO: 01012025
+EXP: 31122026
+31012028
+ALY32 250101
+''';
+      final r = DateParser.parse(label);
+      expect(r.prodDate, DateTime(2025, 1, 1));
+      expect(r.expiryDate, DateTime(2026, 12, 31));
+    });
+
+    test('swaps PRO/EXP when OCR labels are reversed relative to dates', () {
+      const label = '''
+6 937035 203622
+PRO: 18032027
+EXP: 19032025
+ALY32 250319
+''';
+      final r = DateParser.parse(label);
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+      expect(r.barcodeId, '6937035203622');
+    });
   });
 }

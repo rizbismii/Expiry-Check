@@ -8,6 +8,7 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/notification_service.dart';
 import '../services/user_service.dart';
+import '../utils/barcode_input_formatter.dart';
 import '../utils/batch_input_formatter.dart';
 import '../utils/date_parser.dart';
 import '../utils/nz_date_input_formatter.dart';
@@ -94,7 +95,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
     _brandCtrl =
         TextEditingController(text: p?.brand ?? scan?.brand ?? '');
     _barcodeCtrl = TextEditingController(
-        text: p?.barcodeId ?? scan?.barcodeId ?? '');
+        text: BarcodeInputFormatter.normalize(
+            p?.barcodeId ?? scan?.barcodeId ?? ''));
     _batchCtrl = TextEditingController(
         text: BatchInputFormatter.normalize(p?.batch ?? scan?.batch ?? ''));
     final initialProd = p?.prodDate ?? scan?.prodDate;
@@ -208,6 +210,8 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
             if (digits.isNotEmpty) controller.text = digits;
           } else if (fieldKey == 'batch') {
             controller.text = BatchInputFormatter.normalize(words);
+          } else if (fieldKey == 'barcode') {
+            controller.text = BarcodeInputFormatter.normalize(words);
           } else {
             controller.text = words;
           }
@@ -238,22 +242,25 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       final result = await captureAndRecognize(context);
       if (result == null || !mounted) return;
       setState(() {
+        // Always apply recognized values from a fresh scan (overwrite weak
+        // first-pass guesses like Brand=SALTY / Product=WORLD).
         if (result.expiryDate != null) {
           _expiryCtrl.text = _nzDateFmt.format(result.expiryDate!);
         }
-        if (result.prodDate != null && _prodDateCtrl.text.isEmpty) {
+        if (result.prodDate != null) {
           _prodDateCtrl.text = _nzDateFmt.format(result.prodDate!);
         }
-        if (result.barcodeId != null && _barcodeCtrl.text.isEmpty) {
-          _barcodeCtrl.text = result.barcodeId!;
+        if (result.barcodeId != null && result.barcodeId!.isNotEmpty) {
+          _barcodeCtrl.text =
+              BarcodeInputFormatter.normalize(result.barcodeId!);
         }
-        if (result.batch != null && _batchCtrl.text.isEmpty) {
+        if (result.batch != null && result.batch!.isNotEmpty) {
           _batchCtrl.text = BatchInputFormatter.normalize(result.batch!);
         }
-        if (result.brand != null && _brandCtrl.text.isEmpty) {
+        if (result.brand != null && result.brand!.isNotEmpty) {
           _brandCtrl.text = result.brand!;
         }
-        if (result.productName != null && _nameCtrl.text.isEmpty) {
+        if (result.productName != null && result.productName!.isNotEmpty) {
           _nameCtrl.text = result.productName!;
         }
         if (result.category != null) _category = result.category!;
@@ -319,7 +326,7 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
         storeId: _storeId,
         name: _nameCtrl.text.trim(),
         brand: _brandCtrl.text.trim(),
-        barcodeId: _barcodeCtrl.text.trim(),
+        barcodeId: BarcodeInputFormatter.normalize(_barcodeCtrl.text),
         batch: _batchCtrl.text.trim(),
         category: _category,
         quantity: _quantityValue,
@@ -492,11 +499,12 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               focusNode: _focusNodes['barcode'],
               decoration: InputDecoration(
                 labelText: 'Barcode ID',
+                helperText: 'Spaces ignored — 6 937035 203622 → 6937035203622',
                 prefixIcon: const Icon(Icons.qr_code_scanner),
                 suffixIcon: _micButton('barcode', _barcodeCtrl),
               ),
               keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              inputFormatters: [BarcodeInputFormatter()],
             ),
             const SizedBox(height: 12),
             TextFormField(

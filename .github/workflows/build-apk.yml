@@ -1,7 +1,6 @@
 name: Build Android APK
 
-# Auto-build on cursor/* test branches; main stays manual-only via workflow_dispatch
-# after merge (main's workflow file remains dispatch-only when merged separately).
+# Auto-build on cursor/* test branches; manual via Actions → Run workflow anytime.
 on:
   push:
     branches:
