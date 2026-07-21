@@ -7,8 +7,10 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
+import '../services/sync_service.dart';
 import '../services/user_service.dart';
 import '../widgets/report_options_dialog.dart';
+import 'cloud_sync_screen.dart';
 import 'login_screen.dart';
 import 'users_screen.dart';
 
@@ -453,6 +455,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                _sectionTitle('Cloud sync'),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: const Icon(Icons.sync),
+                    title: const Text('Cloud sync'),
+                    subtitle: Text(SyncService.instance.isSignedIn
+                        ? 'On — phones share inventory live'
+                        : 'One switch — no email to type on the phone'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                            builder: (_) => const CloudSyncScreen()),
+                      );
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                ),
+                const SizedBox(height: 24),
                 _sectionTitle('Backup & restore'),
                 Card(
                   margin: EdgeInsets.zero,
@@ -486,9 +508,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: const [
                       ListTile(
                         leading: Icon(Icons.privacy_tip_outlined),
-                        title: Text('Your data stays on your device'),
+                        title: Text('Local-first, optional cloud sync'),
                         subtitle: Text(
-                            'Products are stored locally (SQLite) and AI text recognition runs fully offline with ML Kit — no servers, no subscription costs.'),
+                            'Products are stored on-device (SQLite) with offline AI scanning. Optional Supabase sync keeps multiple phones up to date.'),
                       ),
                     ],
                   ),

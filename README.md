@@ -24,12 +24,21 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
 - **Deletion audit** — swiping a row to delete requires a reason/note; deletions are logged and exported as a "Deletion Log" sheet in Excel reports.
 - **Duplicate cleanup** — Settings → "Clean up duplicate rows" merges existing duplicates (same brand/product/batch/expiry ignoring case, spacing and punctuation) by combining quantities.
 - **Backup & restore** — export a JSON backup and keep it wherever you like; restore it on any device.
+- **Optional cloud sync (Supabase)** — live multi-device sync for products, store names and the deletion log. Local SQLite still works offline; changes push/pull when online.
 
-## Storage: local-first (the cost-effective choice)
+## Storage: local-first + optional Supabase sync
 
-Data is stored **on-device in SQLite** — zero server or subscription costs, works offline, and is private by default. For cloud durability, the backup/report files are handed to the **system share sheet**, so users can save them to **Google Drive / iCloud / OneDrive storage they already have for free**, instead of the app paying for hosted backend storage (e.g. Firebase). This gives cloud backup at effectively \$0 running cost.
+Data is stored **on-device in SQLite** by default — works offline and stays private. Manual backups still go through the share sheet (Drive / iCloud).
 
-If a hosted sync backend is ever needed (multi-device live sync), the `DatabaseService` is the single integration point to swap in Firestore/Supabase later.
+For **live multi-device sync**, enable **Settings → Cloud sync**:
+
+1. Create a free project at [supabase.com](https://supabase.com) (one-time)
+2. Run [`supabase/schema.sql`](supabase/schema.sql) in the SQL Editor (and [`schema_staff_users.sql`](supabase/schema_staff_users.sql) if needed)
+3. In Supabase: **Authentication → Providers → Email** → turn **OFF** “Confirm email”
+4. Put your **Project URL** and **anon public key** into [`lib/config/supabase_config.dart`](lib/config/supabase_config.dart) (or pass `--dart-define=SUPABASE_URL=...` / `SUPABASE_ANON_KEY=...` when building)
+5. Install that APK on every phone and flip **Enable cloud sync** — no email/password typing on the phone
+
+Staff usernames in the app (admin / local users) stay separate from the built-in shop sync account.
 
 ## Tech stack
 
@@ -38,6 +47,7 @@ If a hosted sync backend is ever needed (multi-device live sync), the `DatabaseS
 | OCR (on-device AI) | `google_mlkit_text_recognition` |
 | Camera capture | `image_picker` |
 | Local database | `sqflite` |
+| Cloud sync | `supabase_flutter` |
 | Notifications | `flutter_local_notifications` + `timezone` |
 | Excel export | `excel` |
 | Sharing files | `share_plus` |

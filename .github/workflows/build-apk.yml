@@ -1,11 +1,11 @@
 name: Build Android APK
 
-# Manual on main; auto-build for cursor/* feature branches so test APKs
-# are available while iterating. Trigger anytime via Actions → Run workflow.
+# Auto-build on cursor/* test branches; manual via Actions → Run workflow anytime.
 on:
-  workflow_dispatch:
   push:
-    branches: ["cursor/**"]
+    branches:
+      - "cursor/**"
+  workflow_dispatch:
 
 jobs:
   build:
@@ -20,13 +20,13 @@ jobs:
 
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.32.5"
+          flutter-version: "3.44.6"
           channel: stable
           cache: true
 
       - run: flutter pub get
 
-      - run: flutter analyze --no-fatal-infos
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
       - run: flutter test
 

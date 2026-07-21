@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +9,7 @@ import '../models/store.dart';
 import '../services/database_service.dart';
 import '../services/export_service.dart';
 import '../services/notification_service.dart';
+import '../services/sync_service.dart';
 import '../services/user_service.dart';
 import '../utils/date_parser.dart';
 import '../utils/scan_helper.dart';
@@ -34,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _scanning = false;
   _Filter _filter = _Filter.all;
   String _search = '';
+  StreamSubscription<String>? _syncSub;
 
   Store? get _currentStore =>
       _stores.where((s) => s.id == _storeId).firstOrNull;
@@ -44,8 +48,27 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _ensureSignedIn().then((_) => _load());
+    _ensureSignedIn().then((_) async {
+      if (SyncService.instance.isSignedIn) {
+        try {
+          await SyncService.instance.pushAll();
+          await SyncService.instance.pullAll();
+        } catch (_) {}
+      }
+      await _load();
+    });
     NotificationService.instance.requestPermissions();
+    _syncSub = SyncService.instance.statusStream.listen((msg) {
+      if (msg.contains('Synced') || msg.contains('Pulled')) {
+        _load();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _ensureSignedIn() async {
