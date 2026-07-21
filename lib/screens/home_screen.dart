@@ -51,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _ensureSignedIn().then((_) async {
       if (SyncService.instance.isSignedIn) {
         try {
+          await SyncService.instance.pushAll();
           await SyncService.instance.pullAll();
         } catch (_) {}
       }
