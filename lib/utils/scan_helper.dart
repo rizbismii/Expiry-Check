@@ -31,24 +31,43 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     texts.add(await OcrService.instance.recognizeText(photo.path));
     if (shot == maxShots || !context.mounted) break;
 
+    final partial = DateParser.parse(texts.join('\n'));
+    final needsBottom = partial.expiryDate == null ||
+        partial.barcodeId == null ||
+        partial.prodDate == null;
+
     final more = await showDialog<bool>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: Text('Photo $shot scanned'),
+        title: Text(needsBottom && shot == 1
+            ? 'Bottom panel still needed'
+            : 'Photo $shot scanned'),
         content: Text(shot == 1
-            ? 'Scan the bottom/back panel too — barcode, prod date, expiry '
-                'and batch are usually printed there (often as dotted inkjet '
-                'text under the barcode).'
+            ? (needsBottom
+                ? 'Front label is not enough for barcode, prod date and '
+                    'expiry. Take a close photo of the bottom/back panel '
+                    '(barcode + dotted PRO/EXP/batch lines).'
+                : 'Optional: scan the bottom/back panel too for a clearer '
+                    'barcode, prod date, expiry and batch.')
             : 'Add one more photo? (${maxShots - shot} left)'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Done'),
-          ),
+          if (!(needsBottom && shot == 1))
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Done'),
+            ),
+          if (needsBottom && shot == 1)
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Continue anyway'),
+            ),
           FilledButton.icon(
             onPressed: () => Navigator.pop(context, true),
             icon: const Icon(Icons.add_a_photo),
-            label: Text('Photo ${shot + 1} of $maxShots'),
+            label: Text(needsBottom && shot == 1
+                ? 'Scan bottom panel'
+                : 'Photo ${shot + 1} of $maxShots'),
           ),
         ],
       ),
@@ -59,11 +78,15 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
   if (texts.isEmpty) return null;
   final result = DateParser.parse(texts.join('\n'));
 
-  // Self-learning brand correction from the shop's existing inventory.
+  // Self-learning brand correction from the shop's existing inventory,
+  // plus built-in Salty World brands.
   var brand = result.brand;
+  final known = [
+    ...DateParser.knownVapeBrands,
+    ...await DatabaseService.instance.getKnownBrands(),
+  ];
   if (brand != null) {
-    final known = await DatabaseService.instance.getKnownBrands();
-    final corrected = TextSimilarity.bestBrandMatch(brand, known);
+    final corrected = TextSimilarity.bestBrandMatch(brand, known, threshold: 0.6);
     if (corrected != null) brand = corrected;
   }
 

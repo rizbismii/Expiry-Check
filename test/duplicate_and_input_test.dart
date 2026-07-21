@@ -2,6 +2,7 @@ import 'package:expiry_check/models/product.dart';
 import 'package:expiry_check/models/store.dart';
 import 'package:expiry_check/services/database_service.dart';
 import 'package:expiry_check/services/notification_service.dart';
+import 'package:expiry_check/utils/barcode_input_formatter.dart';
 import 'package:expiry_check/utils/batch_input_formatter.dart';
 import 'package:expiry_check/utils/nz_date_input_formatter.dart';
 import 'package:expiry_check/utils/text_similarity.dart';
@@ -68,6 +69,23 @@ void main() {
 
     test('normalize handles programmatic values', () {
       expect(BatchInputFormatter.normalize('Aly 32  260424'), 'ALY32260424');
+    });
+  });
+
+  group('BarcodeInputFormatter', () {
+    TextEditingValue format(String input) => BarcodeInputFormatter()
+        .formatEditUpdate(TextEditingValue.empty, TextEditingValue(text: input));
+
+    test('strips spaces from under-bars barcode while typing', () {
+      expect(format('6 937035 203622').text, '6937035203622');
+      expect(format('8 19412 02557 6').text, '819412025576');
+    });
+
+    test('normalize strips spaces and other non-digits', () {
+      expect(BarcodeInputFormatter.normalize('6 937035 203622'),
+          '6937035203622');
+      expect(BarcodeInputFormatter.normalize('6-937035-203622'),
+          '6937035203622');
     });
   });
 
