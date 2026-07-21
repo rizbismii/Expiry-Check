@@ -134,11 +134,6 @@ class SyncService {
     }
   }
 
-  String ensureCloudId(String? existing) {
-    if (existing != null && existing.isNotEmpty) return existing;
-    return _uuid.v4();
-  }
-
   /// Upsert one product after a local write.
   Future<void> upsertProduct(Product product) async {
     if (!isSignedIn || _applyingRemote) return;
