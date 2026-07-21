@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/app_user.dart';
 import '../models/product.dart';
 import '../models/store.dart';
 import 'database_service.dart';
@@ -53,7 +54,8 @@ class SyncService {
     await _initClient(url, key);
     if (isSignedIn) {
       await startRealtime();
-      unawaited(pullAll());
+      // Push first so local staff/products are not wiped by an empty pull.
+      unawaited(pushAll().then((_) => pullAll()));
     }
   }
 
@@ -105,6 +107,7 @@ class SyncService {
     }
     _emit('Signed up as ${email.trim()}');
     await pushAll();
+    await pullAll();
     await startRealtime();
   }
 
@@ -115,8 +118,10 @@ class SyncService {
       password: password,
     );
     _emit('Signed in as ${email.trim()}');
-    await pullAll();
+    // Push local staff/products first so a first-time cloud account does not
+    // miss device-created users, then pull remote rows from other devices.
     await pushAll();
+    await pullAll();
     await startRealtime();
   }
 
@@ -167,6 +172,30 @@ class SyncService {
     });
   }
 
+  Future<void> upsertStaffUser(AppUser user) async {
+    if (!isSignedIn || _applyingRemote) return;
+    final userId = Supabase.instance.client.auth.currentUser!.id;
+    final username = user.username.trim();
+    final password = user.password.trim();
+    if (username.isEmpty || password.isEmpty) return;
+    await Supabase.instance.client.from('staff_users').upsert({
+      'user_id': userId,
+      'username': username,
+      'password': password,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
+  Future<void> deleteStaffUser(String username) async {
+    if (!isSignedIn || _applyingRemote) return;
+    final userId = Supabase.instance.client.auth.currentUser!.id;
+    await Supabase.instance.client
+        .from('staff_users')
+        .delete()
+        .eq('user_id', userId)
+        .ilike('username', username.trim());
+  }
+
   Future<void> pushDeletion(DeletionEntry entry) async {
     if (!isSignedIn || _applyingRemote) return;
     final userId = Supabase.instance.client.auth.currentUser!.id;
@@ -184,12 +213,13 @@ class SyncService {
     });
   }
 
-  /// Full push of local inventory + store names.
+  /// Full push of local inventory + store names + staff users.
   Future<void> pushAll() async {
     if (!isSignedIn) return;
     final userId = Supabase.instance.client.auth.currentUser!.id;
     final products = await DatabaseService.instance.getAll();
     final stores = await DatabaseService.instance.getStores();
+    final staff = await DatabaseService.instance.getUsers();
 
     for (final s in stores) {
       await Supabase.instance.client.from('stores').upsert({
@@ -200,8 +230,17 @@ class SyncService {
       });
     }
 
+    for (final u in staff) {
+      await Supabase.instance.client.from('staff_users').upsert({
+        'user_id': userId,
+        'username': u.username.trim(),
+        'password': u.password.trim(),
+        'updated_at': DateTime.now().toUtc().toIso8601String(),
+      });
+    }
+
     if (products.isEmpty) {
-      _emit('Pushed stores (no products yet)');
+      _emit('Pushed stores + ${staff.length} staff user(s)');
       return;
     }
 
@@ -215,7 +254,7 @@ class SyncService {
       payload.add(p.toRemoteMap(userId));
     }
     await Supabase.instance.client.from('products').upsert(payload);
-    _emit('Pushed ${payload.length} product(s)');
+    _emit('Pushed ${payload.length} product(s), ${staff.length} staff');
   }
 
   /// Pull remote rows into SQLite (last-write-wins on [updatedAt]).
@@ -232,6 +271,30 @@ class SyncService {
         final name = map['name'] as String? ?? '';
         if (id != null && name.isNotEmpty) {
           await DatabaseService.instance.renameStore(id, name, sync: false);
+        }
+      }
+
+      final staffRows = await client.from('staff_users').select();
+      var staffApplied = 0;
+      final remoteNames = <String>{};
+      for (final row in staffRows as List) {
+        final map = Map<String, dynamic>.from(row as Map);
+        final username = (map['username'] as String? ?? '').trim();
+        final password = (map['password'] as String? ?? '').trim();
+        if (username.isEmpty) continue;
+        remoteNames.add(username.toLowerCase());
+        await DatabaseService.instance.applyRemoteStaffUser(
+          AppUser(username: username, password: password),
+        );
+        staffApplied++;
+      }
+      // After a successful cloud fetch, drop local staff removed remotely.
+      // Safe because sign-in / Push now uploads local staff before pull.
+      final localStaff = await DatabaseService.instance.getUsers();
+      for (final u in localStaff) {
+        if (!remoteNames.contains(u.username.toLowerCase())) {
+          await DatabaseService.instance
+              .deleteStaffUserByUsername(u.username);
         }
       }
 
@@ -279,6 +342,7 @@ class SyncService {
       }
 
       _emit('Pulled $applied product(s)'
+          '${staffApplied > 0 ? ', $staffApplied staff' : ''}'
           '${deletions > 0 ? ', $deletions deletion(s)' : ''}');
     } finally {
       _applyingRemote = false;
@@ -305,6 +369,14 @@ class SyncService {
           table: 'stores',
           callback: (payload) {
             unawaited(_onRemoteStoreChange(payload));
+          },
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'staff_users',
+          callback: (payload) {
+            unawaited(_onRemoteStaffChange(payload));
           },
         )
         .subscribe();
@@ -362,6 +434,34 @@ class SyncService {
     _applyingRemote = true;
     try {
       await DatabaseService.instance.renameStore(id, name, sync: false);
+      _emit('Synced change from another device');
+    } catch (e) {
+      _emit('Sync apply failed: $e');
+    } finally {
+      _applyingRemote = false;
+    }
+  }
+
+  Future<void> _onRemoteStaffChange(PostgresChangePayload payload) async {
+    if (_applyingRemote) return;
+    _applyingRemote = true;
+    try {
+      if (payload.eventType == PostgresChangeEvent.delete) {
+        final username = payload.oldRecord['username'] as String?;
+        if (username != null) {
+          await DatabaseService.instance.deleteStaffUserByUsername(username);
+        }
+        _emit('Synced change from another device');
+        return;
+      }
+      final record = payload.newRecord;
+      if (record.isEmpty) return;
+      await DatabaseService.instance.applyRemoteStaffUser(
+        AppUser(
+          username: record['username'] as String? ?? '',
+          password: record['password'] as String? ?? '',
+        ),
+      );
       _emit('Synced change from another device');
     } catch (e) {
       _emit('Sync apply failed: $e');

@@ -36,12 +36,13 @@ class UserService {
   /// admin created. Saves the session on success.
   Future<bool> signIn(String username, String password) async {
     final typed = username.trim();
+    final pass = password.trim();
     if (typed.toLowerCase() == adminUsername) {
-      if (password != adminPassword) return false;
+      if (pass != adminPassword) return false;
       await _saveSession(adminUsername, isAdmin: true);
       return true;
     }
-    final user = await DatabaseService.instance.findUser(typed, password);
+    final user = await DatabaseService.instance.findUser(typed, pass);
     if (user == null) return false;
     await _saveSession(user.username, isAdmin: false);
     return true;

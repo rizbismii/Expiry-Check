@@ -220,7 +220,8 @@ class DatabaseService {
   }
 
   /// Adds a staff user. Returns null on success, or an error message.
-  Future<String?> addUser(String username, String password) async {
+  Future<String?> addUser(String username, String password,
+      {bool sync = true}) async {
     final db = await database;
     final count = Sqflite.firstIntValue(
             await db.rawQuery('SELECT COUNT(*) FROM $_usersTable')) ??
@@ -228,26 +229,66 @@ class DatabaseService {
     if (count >= maxUsers) {
       return 'User limit reached ($maxUsers). Delete a user first.';
     }
+    final trimmedName = username.trim();
+    final trimmedPass = password.trim();
+    if (trimmedName.isEmpty || trimmedPass.isEmpty) {
+      return 'Username and password are required.';
+    }
+    if (trimmedName.toLowerCase() == 'admin') {
+      return 'Username "admin" is reserved.';
+    }
     try {
       await db.insert(_usersTable, {
-        'username': username.trim(),
-        'password': password,
+        'username': trimmedName,
+        'password': trimmedPass,
       });
+      if (sync) {
+        try {
+          await SyncService.instance.upsertStaffUser(
+            AppUser(username: trimmedName, password: trimmedPass),
+          );
+        } catch (_) {}
+      }
       return null;
     } on DatabaseException {
-      return 'Username "$username" already exists.';
+      return 'Username "$trimmedName" already exists.';
     }
   }
 
-  Future<void> updateUserPassword(int id, String password) async {
+  Future<void> updateUserPassword(int id, String password,
+      {bool sync = true}) async {
     final db = await database;
-    await db.update(_usersTable, {'password': password},
+    final trimmedPass = password.trim();
+    await db.update(_usersTable, {'password': trimmedPass},
         where: 'id = ?', whereArgs: [id]);
+    if (sync) {
+      final rows =
+          await db.query(_usersTable, where: 'id = ?', whereArgs: [id], limit: 1);
+      if (rows.isNotEmpty) {
+        try {
+          await SyncService.instance
+              .upsertStaffUser(AppUser.fromMap(rows.first));
+        } catch (_) {}
+      }
+    }
   }
 
-  Future<void> deleteUser(int id) async {
+  Future<void> deleteUser(int id, {bool sync = true}) async {
     final db = await database;
+    String? username;
+    if (sync) {
+      final rows =
+          await db.query(_usersTable, where: 'id = ?', whereArgs: [id], limit: 1);
+      if (rows.isNotEmpty) {
+        username = rows.first['username'] as String?;
+      }
+    }
     await db.delete(_usersTable, where: 'id = ?', whereArgs: [id]);
+    if (sync && username != null) {
+      try {
+        await SyncService.instance.deleteStaffUser(username);
+      } catch (_) {}
+    }
   }
 
   /// Looks up a staff user by credentials; null when they don't match.
@@ -256,10 +297,48 @@ class DatabaseService {
     final rows = await db.query(
       _usersTable,
       where: 'username = ? COLLATE NOCASE AND password = ?',
-      whereArgs: [username.trim(), password],
+      whereArgs: [username.trim(), password.trim()],
       limit: 1,
     );
     return rows.isEmpty ? null : AppUser.fromMap(rows.first);
+  }
+
+  /// Upsert a staff user pulled from Supabase (match by username, case-insensitive).
+  Future<void> applyRemoteStaffUser(AppUser remote) async {
+    final name = remote.username.trim();
+    final pass = remote.password.trim();
+    if (name.isEmpty || pass.isEmpty) return;
+    final db = await database;
+    final existing = await db.query(
+      _usersTable,
+      where: 'username = ? COLLATE NOCASE',
+      whereArgs: [name],
+      limit: 1,
+    );
+    if (existing.isEmpty) {
+      final count = Sqflite.firstIntValue(
+              await db.rawQuery('SELECT COUNT(*) FROM $_usersTable')) ??
+          0;
+      if (count >= maxUsers) return;
+      await db.insert(_usersTable, {'username': name, 'password': pass});
+      return;
+    }
+    await db.update(
+      _usersTable,
+      {'username': name, 'password': pass},
+      where: 'id = ?',
+      whereArgs: [existing.first['id']],
+    );
+  }
+
+  /// Remove a local staff user by username (from remote delete).
+  Future<void> deleteStaffUserByUsername(String username) async {
+    final db = await database;
+    await db.delete(
+      _usersTable,
+      where: 'username = ? COLLATE NOCASE',
+      whereArgs: [username.trim()],
+    );
   }
 
   /// Distinct brand names already in the inventory, used to auto-correct

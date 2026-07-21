@@ -49,9 +49,19 @@ create table if not exists public.deletion_log (
   quantity integer not null default 1
 );
 
+-- Staff app logins created by admin (shared across devices via sync account)
+create table if not exists public.staff_users (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  username text not null,
+  password text not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, username)
+);
+
 alter table public.products enable row level security;
 alter table public.stores enable row level security;
 alter table public.deletion_log enable row level security;
+alter table public.staff_users enable row level security;
 
 -- Recreate policies so re-runs do not fail with "already exists".
 drop policy if exists "products_select_own" on public.products;
@@ -87,9 +97,23 @@ create policy "deletion_log_select_own" on public.deletion_log
 create policy "deletion_log_insert_own" on public.deletion_log
   for insert with check (auth.uid() = user_id);
 
+drop policy if exists "staff_users_select_own" on public.staff_users;
+drop policy if exists "staff_users_insert_own" on public.staff_users;
+drop policy if exists "staff_users_update_own" on public.staff_users;
+drop policy if exists "staff_users_delete_own" on public.staff_users;
+create policy "staff_users_select_own" on public.staff_users
+  for select using (auth.uid() = user_id);
+create policy "staff_users_insert_own" on public.staff_users
+  for insert with check (auth.uid() = user_id);
+create policy "staff_users_update_own" on public.staff_users
+  for update using (auth.uid() = user_id);
+create policy "staff_users_delete_own" on public.staff_users
+  for delete using (auth.uid() = user_id);
+
 -- Needed so Realtime can send old row data on UPDATE/DELETE.
 alter table public.products replica identity full;
 alter table public.stores replica identity full;
+alter table public.staff_users replica identity full;
 
 -- Add tables to Realtime only if not already members.
 do $$
@@ -111,10 +135,19 @@ begin
   ) then
     execute 'alter publication supabase_realtime add table public.stores';
   end if;
+
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'staff_users'
+  ) then
+    execute 'alter publication supabase_realtime add table public.staff_users';
+  end if;
 exception
   when others then
     -- Some projects block ALTER PUBLICATION from the SQL editor.
     -- If this fails, enable Realtime manually:
-    -- Database → Publications → supabase_realtime → toggle products + stores.
+    -- Database → Publications → supabase_realtime → toggle products + stores + staff_users.
     raise notice 'Realtime publication step skipped: %', sqlerrm;
 end $$;

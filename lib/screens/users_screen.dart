@@ -139,7 +139,7 @@ class _UsersScreenState extends State<UsersScreen> {
             onPressed: () {
               if (formKey.currentState!.validate()) {
                 Navigator.pop(context,
-                    (usernameCtrl.text.trim(), passwordCtrl.text));
+                    (usernameCtrl.text.trim(), passwordCtrl.text.trim()));
               }
             },
             child: const Text('Save'),

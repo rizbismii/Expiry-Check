@@ -136,12 +136,14 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                     '1. Create a free project at supabase.com\n'
                     '2. Paste supabase/schema.sql into the SQL Editor and Run '
                     '(safe to re-run if it errored before)\n'
-                    '3. If needed, enable Realtime for products + stores under '
-                    'Database → Publications → supabase_realtime\n'
-                    '4. Paste Project URL + anon public key below\n'
-                    '5. Create one shared shop email/password and sign in '
+                    '3. If you already set up sync earlier, also run '
+                    'supabase/schema_staff_users.sql so staff logins sync\n'
+                    '4. If needed, enable Realtime for products + stores + '
+                    'staff_users under Database → Publications\n'
+                    '5. Paste Project URL + anon public key below\n'
+                    '6. Create one shared shop email/password and sign in '
                     'on every device with those same credentials\n'
-                    '6. Inventory then syncs live across devices',
+                    '7. Inventory and staff users then sync live across devices',
                     style: TextStyle(height: 1.4),
                   ),
                 ],
