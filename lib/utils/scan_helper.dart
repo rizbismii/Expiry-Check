@@ -44,7 +44,7 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
       }
       path = cropped;
     }
-    if (path == null || path.isEmpty) break;
+    if (path.isEmpty) break;
 
     texts.add(await OcrService.instance.recognizeText(path));
     if (shot == maxShots || !context.mounted) break;
