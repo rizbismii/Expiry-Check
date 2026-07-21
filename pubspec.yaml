@@ -51,6 +51,7 @@ dependencies:
   image: ^3.3.0
   supabase_flutter: ^2.16.0
   uuid: ^4.6.0
+  image_cropper: ^12.2.1
 
 dev_dependencies:
   flutter_test:

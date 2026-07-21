@@ -106,7 +106,9 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                     'Turn this on and every phone with this app shares the '
                     'same inventory and staff logins automatically.\n\n'
                     'No email or API keys to type on the phone — those are '
-                    'built into the app.',
+                    'built into the app.\n\n'
+                    'First time: in Supabase turn OFF Authentication → '
+                    'Providers → Email → Confirm email, then tap Connect.',
                     style: TextStyle(height: 1.4),
                   ),
                 ],

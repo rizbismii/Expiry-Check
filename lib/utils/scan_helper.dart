@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:image_cropper/image_cropper.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../services/database_service.dart';
@@ -8,10 +9,8 @@ import '../utils/text_similarity.dart';
 
 /// Guides the user through capturing up to [maxShots] photos of a product
 /// (front for brand/flavour, bottom/side for barcode, prod/expiry & batch),
-/// runs on-device text recognition on each, and parses the combined text. The
-/// brand guess is auto-corrected against brands already in the inventory,
-/// which fixes OCR misreads of stylized logos (e.g. "GALTY" -> "Salty Puff
-/// World").
+/// optionally cropping each shot, running on-device OCR, and parsing the
+/// combined text. Brand guesses are auto-corrected against known inventory.
 ///
 /// Returns null when the user cancels before taking any photo.
 Future<OcrParseResult?> captureAndRecognize(BuildContext context,
@@ -20,15 +19,34 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
   final texts = <String>[];
 
   for (var shot = 1; shot <= maxShots; shot++) {
-    // Full resolution helps ML Kit read small inkjet PRO/EXP/batch lines.
-    final photo = await picker.pickImage(
-      source: ImageSource.camera,
-      imageQuality: 100,
-      maxWidth: 4096,
-      maxHeight: 4096,
-    );
-    if (photo == null) break;
-    texts.add(await OcrService.instance.recognizeText(photo.path));
+    String? path;
+    while (path == null) {
+      // Full resolution helps ML Kit read small inkjet PRO/EXP/batch lines.
+      final photo = await picker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 100,
+        maxWidth: 4096,
+        maxHeight: 4096,
+      );
+      if (photo == null) {
+        // Cancelled camera — finish with whatever we have so far.
+        path = '';
+        break;
+      }
+      if (!context.mounted) {
+        path = '';
+        break;
+      }
+      final cropped = await _maybeCrop(context, photo.path, shot: shot);
+      if (cropped == null) {
+        // Retake — loop and open camera again.
+        continue;
+      }
+      path = cropped;
+    }
+    if (path == null || path.isEmpty) break;
+
+    texts.add(await OcrService.instance.recognizeText(path));
     if (shot == maxShots || !context.mounted) break;
 
     final partial = DateParser.parse(texts.join('\n'));
@@ -86,7 +104,8 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     ...await DatabaseService.instance.getKnownBrands(),
   ];
   if (brand != null) {
-    final corrected = TextSimilarity.bestBrandMatch(brand, known, threshold: 0.6);
+    final corrected =
+        TextSimilarity.bestBrandMatch(brand, known, threshold: 0.6);
     if (corrected != null) brand = corrected;
   }
 
@@ -101,4 +120,61 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     category: result.category,
     rawText: result.rawText,
   );
+}
+
+/// Ask whether to crop; returns the path to use, or null if cancelled.
+Future<String?> _maybeCrop(BuildContext context, String sourcePath,
+    {required int shot}) async {
+  final choice = await showDialog<String>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => AlertDialog(
+      title: Text(shot == 1 ? 'Crop label?' : 'Crop photo $shot?'),
+      content: const Text(
+        'Cropping to just the text (barcode, dates, brand) improves scan '
+        'accuracy. Or use the full photo as taken.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'cancel'),
+          child: const Text('Retake'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(context, 'full'),
+          child: const Text('Use full photo'),
+        ),
+        FilledButton.icon(
+          onPressed: () => Navigator.pop(context, 'crop'),
+          icon: const Icon(Icons.crop),
+          label: const Text('Crop'),
+        ),
+      ],
+    ),
+  );
+
+  if (choice == null || choice == 'cancel') return null;
+  if (choice == 'full') return sourcePath;
+
+  final cropped = await ImageCropper().cropImage(
+    sourcePath: sourcePath,
+    compressQuality: 100,
+    uiSettings: [
+      AndroidUiSettings(
+        toolbarTitle: 'Crop label',
+        toolbarColor: const Color(0xFF1B5E20),
+        toolbarWidgetColor: Colors.white,
+        activeControlsWidgetColor: const Color(0xFF1B5E20),
+        initAspectRatio: CropAspectRatioPreset.original,
+        lockAspectRatio: false,
+        hideBottomControls: false,
+      ),
+      IOSUiSettings(
+        title: 'Crop label',
+        doneButtonTitle: 'Done',
+        cancelButtonTitle: 'Cancel',
+      ),
+    ],
+  );
+  // Cancelled crop → fall back to full photo so the scan is not lost.
+  return cropped?.path ?? sourcePath;
 }

@@ -22,6 +22,7 @@ class SyncService {
   // Legacy prefs from the old manual setup UI (still read as fallback).
   static const _prefUrl = 'supabase_url';
   static const _prefAnonKey = 'supabase_anon_key';
+  static const _prefShopReady = 'supabase_shop_account_ready';
 
   static const _uuid = Uuid();
 
@@ -121,7 +122,8 @@ class SyncService {
     _emit('Live sync on');
   }
 
-  /// Sign in with the built-in shop account; create it if missing.
+  /// Sign in with the built-in shop account; create it once if missing.
+  /// Never retries sign-up after an email rate-limit — that floods Supabase.
   Future<void> _ensureShopSession() async {
     _ensureReady();
     if (isSignedIn) return;
@@ -132,35 +134,94 @@ class SyncService {
       throw Exception('Shop sync account is missing from app config.');
     }
 
+    final prefs = await SharedPreferences.getInstance();
+
     try {
       await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
-      _emit('Connected as $email');
+      await prefs.setBool(_prefShopReady, true);
+      _emit('Connected');
       return;
-    } catch (_) {
-      // First device: create the shared shop account automatically.
+    } on AuthException catch (e) {
+      final rateLimited = e.statusCode == '429' ||
+          e.code == 'over_email_send_rate_limit' ||
+          e.message.toLowerCase().contains('rate limit');
+      if (rateLimited) {
+        throw Exception(
+          'Supabase email limit hit. Wait ~1 hour, or in Supabase: '
+          'Authentication → Users → Add user with\n'
+          '$email / $password\n'
+          'and turn OFF Authentication → Providers → Email → Confirm email. '
+          'Then tap Connect again.',
+        );
+      }
+      // Wrong password / unknown user → try create once below.
+    } catch (e) {
+      final text = '$e'.toLowerCase();
+      if (text.contains('rate limit') || text.contains('429')) {
+        throw Exception(
+          'Supabase email limit hit. Wait ~1 hour, or add the shop user '
+          'manually in Supabase Auth (see Connect error details), then retry.',
+        );
+      }
     }
 
-    final res = await Supabase.instance.client.auth.signUp(
-      email: email,
-      password: password,
-    );
-    if (res.user == null && res.session == null) {
+    // Only attempt sign-up once per install unless it previously succeeded.
+    final alreadyTried = prefs.getBool(_prefShopReady) ?? false;
+    if (alreadyTried) {
       throw Exception(
-        'Could not create shop sync account. In Supabase go to '
-        'Authentication → Providers → Email and turn OFF '
-        '"Confirm email", then try again.',
+        'Could not sign in as $email. In Supabase → Authentication → Users, '
+        'create that user with password "$password", turn OFF email confirm, '
+        'then tap Connect.',
       );
     }
-    if (!isSignedIn) {
+
+    try {
+      final res = await Supabase.instance.client.auth.signUp(
+        email: email,
+        password: password,
+      );
+      await prefs.setBool(_prefShopReady, true);
+      if (res.session != null || isSignedIn) {
+        _emit('Shop sync account ready');
+        return;
+      }
+      // Account created but needs confirm — force sign-in attempt.
       await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
       );
+      _emit('Connected');
+    } on AuthException catch (e) {
+      await prefs.setBool(_prefShopReady, true);
+      final rateLimited = e.statusCode == '429' ||
+          e.code == 'over_email_send_rate_limit' ||
+          e.message.toLowerCase().contains('rate limit');
+      if (rateLimited) {
+        throw Exception(
+          'Email rate limit while creating shop account. '
+          'In Supabase: turn OFF Confirm email, then Authentication → Users '
+          '→ Add user:\n$email\n$password\nThen tap Connect (no more emails).',
+        );
+      }
+      // User may already exist from a previous attempt.
+      try {
+        await Supabase.instance.client.auth.signInWithPassword(
+          email: email,
+          password: password,
+        );
+        _emit('Connected');
+        return;
+      } catch (_) {
+        throw Exception(
+          'Could not create/sign in shop account (${e.message}). '
+          'Turn OFF Confirm email in Supabase, add user $email manually, '
+          'then Connect.',
+        );
+      }
     }
-    _emit('Shop sync account ready ($email)');
   }
 
   Future<void> signOutSync() async {

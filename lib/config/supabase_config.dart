@@ -24,7 +24,7 @@ class SupabaseConfig {
   /// Shared shop sync login (not a staff username). Auto sign-in on every phone.
   static const shopEmail = String.fromEnvironment(
     'SUPABASE_SHOP_EMAIL',
-    defaultValue: 'expirycheck.shop@gmail.com',
+    defaultValue: 'expiry.check.shop@gmail.com',
   );
 
   static const shopPassword = String.fromEnvironment(
