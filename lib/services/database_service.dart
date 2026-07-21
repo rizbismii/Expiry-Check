@@ -1,9 +1,11 @@
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/app_user.dart';
 import '../models/product.dart';
 import '../models/store.dart';
+import 'sync_service.dart';
 
 /// Audit record kept when a product row is deleted via swipe.
 class DeletionEntry {
@@ -50,11 +52,12 @@ class DatabaseService {
   static final DatabaseService instance = DatabaseService._();
 
   static const _dbName = 'expiry_check.db';
-  static const _dbVersion = 5;
+  static const _dbVersion = 6;
   static const _table = 'products';
   static const _storesTable = 'stores';
   static const _deletionsTable = 'deletion_log';
   static const _usersTable = 'users';
+  static const _uuid = Uuid();
 
   /// Admin may create at most this many staff accounts.
   static const maxUsers = 10;
@@ -77,6 +80,7 @@ class DatabaseService {
         await db.execute('''
           CREATE TABLE $_table (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cloudId TEXT NOT NULL DEFAULT '',
             storeId INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
             brand TEXT NOT NULL DEFAULT '',
@@ -87,10 +91,14 @@ class DatabaseService {
             prodDate TEXT,
             expiryDate TEXT NOT NULL,
             addedDate TEXT NOT NULL,
+            updatedAt TEXT NOT NULL,
             notes TEXT NOT NULL DEFAULT '',
             createdBy TEXT NOT NULL DEFAULT ''
           )
         ''');
+        await db.execute(
+            'CREATE UNIQUE INDEX IF NOT EXISTS products_cloudId_idx '
+            'ON $_table (cloudId) WHERE cloudId != \'\'');
         await _createStoresTable(db);
         await _createDeletionsTable(db);
         await _createUsersTable(db);
@@ -113,6 +121,28 @@ class DatabaseService {
           await db.execute(
               "ALTER TABLE $_table ADD COLUMN barcodeId TEXT NOT NULL DEFAULT ''");
           await db.execute('ALTER TABLE $_table ADD COLUMN prodDate TEXT');
+        }
+        if (oldVersion < 6) {
+          await db.execute(
+              "ALTER TABLE $_table ADD COLUMN cloudId TEXT NOT NULL DEFAULT ''");
+          await db.execute(
+              "ALTER TABLE $_table ADD COLUMN updatedAt TEXT NOT NULL DEFAULT ''");
+          // Backfill updatedAt from addedDate and assign cloudIds.
+          final rows = await db.query(_table, columns: ['id', 'addedDate']);
+          for (final row in rows) {
+            await db.update(
+              _table,
+              {
+                'cloudId': _uuid.v4(),
+                'updatedAt': row['addedDate'] ?? DateTime.now().toIso8601String(),
+              },
+              where: 'id = ?',
+              whereArgs: [row['id']],
+            );
+          }
+          await db.execute(
+              'CREATE UNIQUE INDEX IF NOT EXISTS products_cloudId_idx '
+              'ON $_table (cloudId) WHERE cloudId != \'\'');
         }
       },
     );
@@ -165,14 +195,20 @@ class DatabaseService {
     return rows.map(Store.fromMap).toList();
   }
 
-  Future<void> renameStore(int id, String name) async {
+  Future<void> renameStore(int id, String name, {bool sync = true}) async {
     final db = await database;
+    final trimmed = name.trim();
     await db.update(
       _storesTable,
-      {'name': name},
+      {'name': trimmed},
       where: 'id = ?',
       whereArgs: [id],
     );
+    if (sync) {
+      try {
+        await SyncService.instance.upsertStore(Store(id: id, name: trimmed));
+      } catch (_) {}
+    }
   }
 
   // ---- Users (admin-managed staff accounts) ----
@@ -237,26 +273,106 @@ class DatabaseService {
 
   // ---- Products ----
 
-  Future<Product> insert(Product product) async {
+  Future<Product> insert(Product product, {bool sync = true}) async {
     final db = await database;
-    final map = product.toMap()..remove('id');
+    final now = DateTime.now();
+    final withIds = product.copyWith(
+      cloudId: product.cloudId.isEmpty ? _uuid.v4() : product.cloudId,
+      updatedAt: now,
+    );
+    final map = withIds.toMap()..remove('id');
     final id = await db.insert(_table, map);
-    return product.copyWith(id: id);
+    final saved = withIds.copyWith(id: id);
+    if (sync) {
+      try {
+        await SyncService.instance.upsertProduct(saved);
+      } catch (_) {
+        // Offline / sync misconfigured — local write still succeeds.
+      }
+    }
+    return saved;
   }
 
-  Future<void> update(Product product) async {
+  Future<void> update(Product product, {bool sync = true}) async {
     final db = await database;
+    final stamped = product.copyWith(
+      cloudId: product.cloudId.isEmpty ? _uuid.v4() : product.cloudId,
+      updatedAt: DateTime.now(),
+    );
     await db.update(
       _table,
-      product.toMap()..remove('id'),
+      stamped.toMap()..remove('id'),
       where: 'id = ?',
-      whereArgs: [product.id],
+      whereArgs: [stamped.id],
     );
+    if (sync) {
+      try {
+        await SyncService.instance.upsertProduct(stamped);
+      } catch (_) {}
+    }
   }
 
-  Future<void> delete(int id) async {
+  Future<void> delete(int id, {bool sync = true}) async {
     final db = await database;
+    Product? existing;
+    if (sync) {
+      final rows =
+          await db.query(_table, where: 'id = ?', whereArgs: [id], limit: 1);
+      if (rows.isNotEmpty) existing = Product.fromMap(rows.first);
+    }
     await db.delete(_table, where: 'id = ?', whereArgs: [id]);
+    if (sync && existing != null) {
+      try {
+        await SyncService.instance.deleteProduct(existing);
+      } catch (_) {}
+    }
+  }
+
+  /// Guarantee [product] has a persisted [Product.cloudId] for sync identity.
+  Future<Product> ensurePersistedCloudId(Product product) async {
+    if (product.cloudId.isNotEmpty) return product;
+    final withId = product.copyWith(cloudId: _uuid.v4());
+    if (withId.id != null) {
+      final db = await database;
+      await db.update(
+        _table,
+        {'cloudId': withId.cloudId},
+        where: 'id = ?',
+        whereArgs: [withId.id],
+      );
+    }
+    return withId;
+  }
+
+  Future<Product?> findByCloudId(String cloudId) async {
+    if (cloudId.isEmpty) return null;
+    final db = await database;
+    final rows = await db.query(
+      _table,
+      where: 'cloudId = ?',
+      whereArgs: [cloudId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : Product.fromMap(rows.first);
+  }
+
+  /// Apply a product row from Supabase (insert or LWW update).
+  Future<void> applyRemoteProduct(Product remote) async {
+    if (remote.cloudId.isEmpty) return;
+    final existing = await findByCloudId(remote.cloudId);
+    if (existing == null) {
+      await insert(remote, sync: false);
+      return;
+    }
+    if (remote.updatedAt.isBefore(existing.updatedAt)) return;
+    await update(remote.copyWith(id: existing.id), sync: false);
+  }
+
+  Future<void> deleteByCloudId(String cloudId, {bool sync = true}) async {
+    if (cloudId.isEmpty) return;
+    final existing = await findByCloudId(cloudId);
+    if (existing?.id == null) return;
+    await delete(existing!.id!, sync: sync);
   }
 
   /// All products, or only one branch's inventory when [storeId] is given.
@@ -341,17 +457,31 @@ class DatabaseService {
   Future<void> logDeletion(Product p,
       {required String note, required String deletedBy}) async {
     final db = await database;
+    final entry = DeletionEntry(
+      deletedAt: DateTime.now(),
+      deletedBy: deletedBy,
+      note: note,
+      storeId: p.storeId,
+      name: p.name,
+      brand: p.brand,
+      batch: p.batch,
+      expiryDate: p.expiryDate,
+      quantity: p.quantity,
+    );
     await db.insert(_deletionsTable, {
-      'deletedAt': DateTime.now().toIso8601String(),
-      'deletedBy': deletedBy,
-      'note': note,
-      'storeId': p.storeId,
-      'name': p.name,
-      'brand': p.brand,
-      'batch': p.batch,
-      'expiryDate': p.expiryDate.toIso8601String(),
-      'quantity': p.quantity,
+      'deletedAt': entry.deletedAt.toIso8601String(),
+      'deletedBy': entry.deletedBy,
+      'note': entry.note,
+      'storeId': entry.storeId,
+      'name': entry.name,
+      'brand': entry.brand,
+      'batch': entry.batch,
+      'expiryDate': entry.expiryDate.toIso8601String(),
+      'quantity': entry.quantity,
     });
+    try {
+      await SyncService.instance.pushDeletion(entry);
+    } catch (_) {}
   }
 
   Future<List<DeletionEntry>> getDeletionLog({int? storeId}) async {
@@ -365,6 +495,32 @@ class DatabaseService {
     return rows.map(DeletionEntry.fromMap).toList();
   }
 
+  /// Insert a deletion-log row from Supabase if not already present locally.
+  Future<bool> applyRemoteDeletion(DeletionEntry entry) async {
+    final existing = await getDeletionLog(storeId: entry.storeId);
+    final already = existing.any((e) =>
+        e.deletedAt.toUtc().millisecondsSinceEpoch ==
+            entry.deletedAt.toUtc().millisecondsSinceEpoch &&
+        e.name == entry.name &&
+        e.batch == entry.batch &&
+        e.deletedBy == entry.deletedBy &&
+        e.quantity == entry.quantity);
+    if (already) return false;
+    final db = await database;
+    await db.insert(_deletionsTable, {
+      'deletedAt': entry.deletedAt.toIso8601String(),
+      'deletedBy': entry.deletedBy,
+      'note': entry.note,
+      'storeId': entry.storeId,
+      'name': entry.name,
+      'brand': entry.brand,
+      'batch': entry.batch,
+      'expiryDate': entry.expiryDate.toIso8601String(),
+      'quantity': entry.quantity,
+    });
+    return true;
+  }
+
   /// Replaces the whole inventory (used by backup restore). When [stores]
   /// is provided, matching store ids are renamed to the backed-up names.
   Future<void> replaceAll(List<Product> products, {List<Store>? stores}) async {
@@ -372,7 +528,16 @@ class DatabaseService {
     await db.transaction((txn) async {
       await txn.delete(_table);
       for (final p in products) {
-        await txn.insert(_table, p.toMap()..remove('id'));
+        final now = DateTime.now();
+        final stamped = p.copyWith(
+          cloudId: p.cloudId.isEmpty ? _uuid.v4() : p.cloudId,
+          updatedAt: p.updatedAt,
+        );
+        final map = stamped.toMap()..remove('id');
+        if ((map['updatedAt'] as String?)?.isEmpty ?? true) {
+          map['updatedAt'] = now.toIso8601String();
+        }
+        await txn.insert(_table, map);
       }
       if (stores != null) {
         for (final s in stores) {
@@ -385,5 +550,8 @@ class DatabaseService {
         }
       }
     });
+    try {
+      await SyncService.instance.pushAll();
+    } catch (_) {}
   }
 }

@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 
 import 'screens/home_screen.dart';
 import 'services/notification_service.dart';
+import 'services/sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await NotificationService.instance.init();
+  await SyncService.instance.initialize();
   runApp(const ExpiryCheckApp());
 }
 
