@@ -460,10 +460,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   margin: EdgeInsets.zero,
                   child: ListTile(
                     leading: const Icon(Icons.sync),
-                    title: const Text('Supabase live sync'),
+                    title: const Text('Cloud sync'),
                     subtitle: Text(SyncService.instance.isSignedIn
-                        ? 'On — ${SyncService.instance.syncEmail}'
-                        : 'Multi-device sync for products & store names'),
+                        ? 'On — phones share inventory live'
+                        : 'One switch — no email to type on the phone'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () async {
                       await Navigator.of(context).push(

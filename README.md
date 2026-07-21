@@ -30,18 +30,15 @@ A Flutter app for **Android and iOS** that tracks product expiry dates. Point th
 
 Data is stored **on-device in SQLite** by default — works offline and stays private. Manual backups still go through the share sheet (Drive / iCloud).
 
-For **live multi-device sync**, enable Supabase in **Settings → Cloud sync**:
+For **live multi-device sync**, enable **Settings → Cloud sync**:
 
-1. Create a free project at [supabase.com](https://supabase.com)
-2. In the SQL Editor, paste and run the full contents of [`supabase/schema.sql`](supabase/schema.sql) (safe to re-run)
-3. If the editor warns about Realtime publication, turn on **products**, **stores**, and **staff_users** under **Database → Publications → supabase_realtime**
-4. Copy **Project URL** and **anon public key** (Project Settings → API) into the app
-5. Create one shared shop email/password and **sign in on every device with the same credentials**
-6. Use **Push now** / **Pull now**, or just keep working — Realtime keeps products and staff logins in sync
+1. Create a free project at [supabase.com](https://supabase.com) (one-time)
+2. Run [`supabase/schema.sql`](supabase/schema.sql) in the SQL Editor (and [`schema_staff_users.sql`](supabase/schema_staff_users.sql) if needed)
+3. In Supabase: **Authentication → Providers → Email** → turn **OFF** “Confirm email”
+4. Put your **Project URL** and **anon public key** into [`lib/config/supabase_config.dart`](lib/config/supabase_config.dart) (or pass `--dart-define=SUPABASE_URL=...` / `SUPABASE_ANON_KEY=...` when building)
+5. Install that APK on every phone and flip **Enable cloud sync** — no email/password typing on the phone
 
-If you already ran an older schema without staff users, also run [`supabase/schema_staff_users.sql`](supabase/schema_staff_users.sql).
-
-Staff usernames in the app (admin / local users) stay separate from the Supabase sync login. The sync account is only for cloud transport; admin-created staff accounts sync through it.
+Staff usernames in the app (admin / local users) stay separate from the built-in shop sync account.
 
 ## Tech stack
 

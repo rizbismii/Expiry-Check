@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
+import '../config/supabase_config.dart';
 import '../models/app_user.dart';
 import '../models/product.dart';
 import '../models/store.dart';
@@ -11,17 +12,16 @@ import 'database_service.dart';
 
 /// Live multi-device sync via Supabase.
 ///
-/// Model: one shared shop sync account (email/password). Every device signs
-/// into the same account; RLS scopes rows to that auth user. Local SQLite
-/// stays the offline cache; writes upsert to the cloud and Realtime pulls
-/// remote changes back in.
+/// Project URL + anon key + shop account are built into [SupabaseConfig].
+/// Phones only toggle sync on; the app auto-connects and signs in.
 class SyncService {
   SyncService._();
   static final SyncService instance = SyncService._();
 
+  static const _prefEnabled = 'supabase_sync_enabled';
+  // Legacy prefs from the old manual setup UI (still read as fallback).
   static const _prefUrl = 'supabase_url';
   static const _prefAnonKey = 'supabase_anon_key';
-  static const _prefEnabled = 'supabase_sync_enabled';
 
   static const _uuid = Uuid();
 
@@ -41,27 +41,43 @@ class SyncService {
   String? get syncEmail =>
       Supabase.instance.client.auth.currentUser?.email;
 
+  bool get hasBuiltInConfig => SupabaseConfig.isBuiltIn;
+
+  /// True when built-in config or legacy saved prefs can connect.
+  Future<bool> get canConnect async {
+    final (url, key) = await _resolveCredentials();
+    return url.isNotEmpty && key.isNotEmpty;
+  }
+
   /// Call once at app start after [WidgetsFlutterBinding.ensureInitialized].
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
     final enabled = prefs.getBool(_prefEnabled) ?? false;
-    final url = prefs.getString(_prefUrl)?.trim() ?? '';
-    final key = prefs.getString(_prefAnonKey)?.trim() ?? '';
-    if (!enabled || url.isEmpty || key.isEmpty) {
+    if (!enabled) {
       _initialized = false;
       return;
     }
-    await _initClient(url, key);
-    if (isSignedIn) {
-      await startRealtime();
-      // Push first so local staff/products are not wiped by an empty pull.
-      unawaited(pushAll().then((_) => pullAll()));
+    try {
+      await connectAndSync();
+    } catch (e) {
+      _emit('Cloud sync start failed: $e');
     }
+  }
+
+  Future<(String url, String key)> _resolveCredentials() async {
+    if (SupabaseConfig.isBuiltIn) {
+      return (SupabaseConfig.effectiveUrl, SupabaseConfig.effectiveAnonKey);
+    }
+    // Fallback: values saved by an older app build on this device.
+    final prefs = await SharedPreferences.getInstance();
+    return (
+      prefs.getString(_prefUrl)?.trim() ?? '',
+      prefs.getString(_prefAnonKey)?.trim() ?? '',
+    );
   }
 
   Future<void> _initClient(String url, String publishableKey) async {
     if (Supabase.instance.isInitialized) {
-      // Already initialized for this process — update prefs only.
       _initialized = true;
       return;
     }
@@ -69,73 +85,97 @@ class SyncService {
     _initialized = true;
   }
 
-  Future<void> saveConfig({
-    required String url,
-    required String anonKey,
-    required bool enabled,
-  }) async {
+  /// Turn sync on/off. When enabling, auto-connects with built-in credentials.
+  Future<void> setEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefUrl, url.trim());
-    await prefs.setString(_prefAnonKey, anonKey.trim());
     await prefs.setBool(_prefEnabled, enabled);
-    if (enabled && url.trim().isNotEmpty && anonKey.trim().isNotEmpty) {
-      await _initClient(url.trim(), anonKey.trim());
-    } else {
-      await stopRealtime();
+    if (!enabled) {
+      await signOutSync();
       _initialized = false;
+      _emit('Cloud sync off');
+      return;
     }
+    await connectAndSync();
   }
 
-  Future<(String, String, bool)> loadConfig() async {
+  Future<bool> isEnabled() async {
     final prefs = await SharedPreferences.getInstance();
-    return (
-      prefs.getString(_prefUrl) ?? '',
-      prefs.getString(_prefAnonKey) ?? '',
-      prefs.getBool(_prefEnabled) ?? false,
-    );
+    return prefs.getBool(_prefEnabled) ?? false;
   }
 
-  Future<void> signUp(String email, String password) async {
-    _ensureReady();
-    final res = await Supabase.instance.client.auth.signUp(
-      email: email.trim(),
-      password: password,
-    );
-    if (res.user == null) {
-      throw Exception('Sign-up failed. Check the email confirmation setting '
-          'in your Supabase project (Auth → Providers → Email).');
+  /// Init client + auto shop sign-in + push/pull + realtime.
+  Future<void> connectAndSync() async {
+    final (url, key) = await _resolveCredentials();
+    if (url.isEmpty || key.isEmpty) {
+      throw Exception(
+        'Cloud sync is not configured in this app build. '
+        'Add your Supabase URL and anon key to lib/config/supabase_config.dart '
+        'and install a new APK.',
+      );
     }
-    _emit('Signed up as ${email.trim()}');
+    await _initClient(url, key);
+    await _ensureShopSession();
     await pushAll();
     await pullAll();
     await startRealtime();
+    _emit('Live sync on');
   }
 
-  Future<void> signIn(String email, String password) async {
+  /// Sign in with the built-in shop account; create it if missing.
+  Future<void> _ensureShopSession() async {
     _ensureReady();
-    await Supabase.instance.client.auth.signInWithPassword(
-      email: email.trim(),
+    if (isSignedIn) return;
+
+    final email = SupabaseConfig.shopEmail.trim();
+    final password = SupabaseConfig.shopPassword;
+    if (email.isEmpty || password.isEmpty) {
+      throw Exception('Shop sync account is missing from app config.');
+    }
+
+    try {
+      await Supabase.instance.client.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+      _emit('Connected as $email');
+      return;
+    } catch (_) {
+      // First device: create the shared shop account automatically.
+    }
+
+    final res = await Supabase.instance.client.auth.signUp(
+      email: email,
       password: password,
     );
-    _emit('Signed in as ${email.trim()}');
-    // Push local staff/products first so a first-time cloud account does not
-    // miss device-created users, then pull remote rows from other devices.
-    await pushAll();
-    await pullAll();
-    await startRealtime();
+    if (res.user == null && res.session == null) {
+      throw Exception(
+        'Could not create shop sync account. In Supabase go to '
+        'Authentication → Providers → Email and turn OFF '
+        '"Confirm email", then try again.',
+      );
+    }
+    if (!isSignedIn) {
+      await Supabase.instance.client.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+    }
+    _emit('Shop sync account ready ($email)');
   }
 
   Future<void> signOutSync() async {
     await stopRealtime();
     if (isConfigured) {
-      await Supabase.instance.client.auth.signOut();
+      try {
+        await Supabase.instance.client.auth.signOut();
+      } catch (_) {}
     }
     _emit('Cloud sync signed out');
   }
 
   void _ensureReady() {
     if (!isConfigured) {
-      throw Exception('Enter your Supabase URL and anon key first.');
+      throw Exception('Cloud sync is not connected yet.');
     }
   }
 
