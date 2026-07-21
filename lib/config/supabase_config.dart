@@ -35,8 +35,9 @@ class SupabaseConfig {
   // -------------------------------------------------------------------------
   // Paste your project values here once (or use --dart-define when building).
   // -------------------------------------------------------------------------
-  static const _fallbackUrl = '';
-  static const _fallbackAnonKey = '';
+  static const _fallbackUrl = 'https://lzaqzahjfjugabjdinbb.supabase.co';
+  static const _fallbackAnonKey =
+      'sb_publishable_gurLIiGQYajTMEMnKjHXvA_AAX3fsIc';
 
   static String get effectiveUrl =>
       url.isNotEmpty ? url : _fallbackUrl;
