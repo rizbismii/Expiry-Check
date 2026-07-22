@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
@@ -50,6 +51,43 @@ class OcrService {
       unique.add(trimmed);
     }
     return unique.join('\n');
+  }
+
+  /// Read the actual barcode bars (EAN/UPC/etc.), not just OCR digits.
+  /// Works even when the human-readable numbers under the bars are missing.
+  Future<String?> recognizeBarcode(String imagePath) async {
+    final scanner = BarcodeScanner(formats: const [
+      BarcodeFormat.ean13,
+      BarcodeFormat.ean8,
+      BarcodeFormat.upca,
+      BarcodeFormat.upce,
+      BarcodeFormat.code128,
+      BarcodeFormat.code39,
+      BarcodeFormat.itf,
+    ]);
+    try {
+      final input = InputImage.fromFile(File(imagePath));
+      final codes = await scanner.processImage(input);
+      String? best;
+      for (final code in codes) {
+        final raw = (code.rawValue ?? code.displayValue ?? '').trim();
+        if (raw.isEmpty) continue;
+        final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+        if (digits.length == 12 ||
+            digits.length == 13 ||
+            digits.length == 14) {
+          // Prefer EAN-13 when several are found.
+          if (best == null || digits.length > best.length) best = digits;
+        } else if (best == null && digits.length >= 8) {
+          best = digits;
+        }
+      }
+      return best;
+    } catch (_) {
+      return null;
+    } finally {
+      await scanner.close();
+    }
   }
 
   Future<String> _recognizeFile(String imagePath) async {
