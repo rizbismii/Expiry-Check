@@ -10,10 +10,11 @@ import '../models/product.dart';
 import '../models/store.dart';
 import 'database_service.dart';
 
-/// Live multi-device sync via Supabase.
+/// Live multi-device sync via Supabase — **no Auth email/password**.
 ///
-/// Project URL + anon key + shop account are built into [SupabaseConfig].
-/// Phones only toggle sync on; the app auto-connects and signs in.
+/// Phones only need the built-in Project URL + anon key. Rows are scoped by
+/// [SupabaseConfig.shopId]. Staff usernames created under Manage users sync
+/// through `staff_users` and are unrelated to Supabase Auth.
 class SyncService {
   SyncService._();
   static final SyncService instance = SyncService._();
@@ -22,12 +23,12 @@ class SyncService {
   // Legacy prefs from the old manual setup UI (still read as fallback).
   static const _prefUrl = 'supabase_url';
   static const _prefAnonKey = 'supabase_anon_key';
-  static const _prefShopReady = 'supabase_shop_account_ready';
 
   static const _uuid = Uuid();
 
   bool _initialized = false;
   bool _applyingRemote = false;
+  bool _connected = false;
   RealtimeChannel? _channel;
   final _status = StreamController<String>.broadcast();
 
@@ -36,13 +37,12 @@ class SyncService {
   bool get isConfigured =>
       _initialized && Supabase.instance.isInitialized;
 
-  bool get isSignedIn =>
-      isConfigured && Supabase.instance.client.auth.currentUser != null;
-
-  String? get syncEmail =>
-      Supabase.instance.client.auth.currentUser?.email;
+  /// Connected to Supabase with anon key (no Auth session required).
+  bool get isSignedIn => isConfigured && _connected;
 
   bool get hasBuiltInConfig => SupabaseConfig.isBuiltIn;
+
+  String get shopId => SupabaseConfig.shopId;
 
   /// True when built-in config or legacy saved prefs can connect.
   Future<bool> get canConnect async {
@@ -56,6 +56,7 @@ class SyncService {
     final enabled = prefs.getBool(_prefEnabled) ?? false;
     if (!enabled) {
       _initialized = false;
+      _connected = false;
       return;
     }
     try {
@@ -69,7 +70,6 @@ class SyncService {
     if (SupabaseConfig.isBuiltIn) {
       return (SupabaseConfig.effectiveUrl, SupabaseConfig.effectiveAnonKey);
     }
-    // Fallback: values saved by an older app build on this device.
     final prefs = await SharedPreferences.getInstance();
     return (
       prefs.getString(_prefUrl)?.trim() ?? '',
@@ -86,13 +86,14 @@ class SyncService {
     _initialized = true;
   }
 
-  /// Turn sync on/off. When enabling, auto-connects with built-in credentials.
+  /// Turn sync on/off. When enabling, connects with built-in project settings.
   Future<void> setEnabled(bool enabled) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefEnabled, enabled);
     if (!enabled) {
       await signOutSync();
       _initialized = false;
+      _connected = false;
       _emit('Cloud sync off');
       return;
     }
@@ -104,7 +105,7 @@ class SyncService {
     return prefs.getBool(_prefEnabled) ?? false;
   }
 
-  /// Init client + auto shop sign-in + push/pull + realtime.
+  /// Init client (anon key only) + push/pull + realtime. Never sends emails.
   Future<void> connectAndSync() async {
     final (url, key) = await _resolveCredentials();
     if (url.isEmpty || key.isEmpty) {
@@ -115,122 +116,33 @@ class SyncService {
       );
     }
     await _initClient(url, key);
-    await _ensureShopSession();
+    _ensureReady();
+
+    // Probe that RLS/schema allow anon access for this shop.
+    try {
+      await Supabase.instance.client
+          .from('stores')
+          .select('store_id')
+          .eq('shop_id', shopId)
+          .limit(1);
+    } catch (e) {
+      throw Exception(
+        'Could not reach the shop sync tables. In Supabase SQL Editor run '
+        'supabase/schema_migrate_no_email.sql (or schema.sql on a fresh '
+        'project), then tap Connect again.\n\nDetails: $e',
+      );
+    }
+
+    _connected = true;
     await pushAll();
     await pullAll();
     await startRealtime();
     _emit('Live sync on');
   }
 
-  /// Sign in with the built-in shop account; create it once if missing.
-  /// Never retries sign-up after an email rate-limit — that floods Supabase.
-  Future<void> _ensureShopSession() async {
-    _ensureReady();
-    if (isSignedIn) return;
-
-    final email = SupabaseConfig.shopEmail.trim();
-    final password = SupabaseConfig.shopPassword;
-    if (email.isEmpty || password.isEmpty) {
-      throw Exception('Shop sync account is missing from app config.');
-    }
-
-    final prefs = await SharedPreferences.getInstance();
-
-    try {
-      await Supabase.instance.client.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
-      await prefs.setBool(_prefShopReady, true);
-      _emit('Connected');
-      return;
-    } on AuthException catch (e) {
-      final rateLimited = e.statusCode == '429' ||
-          e.code == 'over_email_send_rate_limit' ||
-          e.message.toLowerCase().contains('rate limit');
-      if (rateLimited) {
-        throw Exception(
-          'Supabase email limit hit. Wait ~1 hour, or in Supabase: '
-          'Authentication → Users → Add user with\n'
-          '$email / $password\n'
-          'and turn OFF Authentication → Providers → Email → Confirm email. '
-          'Then tap Connect again.',
-        );
-      }
-      // Wrong password / unknown user → try create once below.
-    } catch (e) {
-      final text = '$e'.toLowerCase();
-      if (text.contains('rate limit') || text.contains('429')) {
-        throw Exception(
-          'Supabase email limit hit. Wait ~1 hour, or add the shop user '
-          'manually in Supabase Auth (see Connect error details), then retry.',
-        );
-      }
-    }
-
-    // Only attempt sign-up once per install unless it previously succeeded.
-    final alreadyTried = prefs.getBool(_prefShopReady) ?? false;
-    if (alreadyTried) {
-      throw Exception(
-        'Could not sign in as $email. In Supabase → Authentication → Users, '
-        'create that user with password "$password", turn OFF email confirm, '
-        'then tap Connect.',
-      );
-    }
-
-    try {
-      final res = await Supabase.instance.client.auth.signUp(
-        email: email,
-        password: password,
-      );
-      await prefs.setBool(_prefShopReady, true);
-      if (res.session != null || isSignedIn) {
-        _emit('Shop sync account ready');
-        return;
-      }
-      // Account created but needs confirm — force sign-in attempt.
-      await Supabase.instance.client.auth.signInWithPassword(
-        email: email,
-        password: password,
-      );
-      _emit('Connected');
-    } on AuthException catch (e) {
-      await prefs.setBool(_prefShopReady, true);
-      final rateLimited = e.statusCode == '429' ||
-          e.code == 'over_email_send_rate_limit' ||
-          e.message.toLowerCase().contains('rate limit');
-      if (rateLimited) {
-        throw Exception(
-          'Email rate limit while creating shop account. '
-          'In Supabase: turn OFF Confirm email, then Authentication → Users '
-          '→ Add user:\n$email\n$password\nThen tap Connect (no more emails).',
-        );
-      }
-      // User may already exist from a previous attempt.
-      try {
-        await Supabase.instance.client.auth.signInWithPassword(
-          email: email,
-          password: password,
-        );
-        _emit('Connected');
-        return;
-      } catch (_) {
-        throw Exception(
-          'Could not create/sign in shop account (${e.message}). '
-          'Turn OFF Confirm email in Supabase, add user $email manually, '
-          'then Connect.',
-        );
-      }
-    }
-  }
-
   Future<void> signOutSync() async {
     await stopRealtime();
-    if (isConfigured) {
-      try {
-        await Supabase.instance.client.auth.signOut();
-      } catch (_) {}
-    }
+    _connected = false;
     _emit('Cloud sync signed out');
   }
 
@@ -243,12 +155,11 @@ class SyncService {
   /// Upsert one product after a local write.
   Future<void> upsertProduct(Product product) async {
     if (!isSignedIn || _applyingRemote) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     final toSend =
         await DatabaseService.instance.ensurePersistedCloudId(product);
     await Supabase.instance.client
         .from('products')
-        .upsert(toSend.toRemoteMap(userId));
+        .upsert(toSend.toRemoteMap(shopId));
   }
 
   /// Soft-delete on the server so other devices drop the row.
@@ -259,14 +170,13 @@ class SyncService {
     await Supabase.instance.client.from('products').update({
       'deleted_at': DateTime.now().toUtc().toIso8601String(),
       'updated_at': DateTime.now().toUtc().toIso8601String(),
-    }).eq('id', cloudId);
+    }).eq('id', cloudId).eq('shop_id', shopId);
   }
 
   Future<void> upsertStore(Store store) async {
     if (!isSignedIn || _applyingRemote) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     await Supabase.instance.client.from('stores').upsert({
-      'user_id': userId,
+      'shop_id': shopId,
       'store_id': store.id,
       'name': store.name,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -275,12 +185,11 @@ class SyncService {
 
   Future<void> upsertStaffUser(AppUser user) async {
     if (!isSignedIn || _applyingRemote) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     final username = user.username.trim();
     final password = user.password.trim();
     if (username.isEmpty || password.isEmpty) return;
     await Supabase.instance.client.from('staff_users').upsert({
-      'user_id': userId,
+      'shop_id': shopId,
       'username': username,
       'password': password,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -289,19 +198,17 @@ class SyncService {
 
   Future<void> deleteStaffUser(String username) async {
     if (!isSignedIn || _applyingRemote) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     await Supabase.instance.client
         .from('staff_users')
         .delete()
-        .eq('user_id', userId)
+        .eq('shop_id', shopId)
         .ilike('username', username.trim());
   }
 
   Future<void> pushDeletion(DeletionEntry entry) async {
     if (!isSignedIn || _applyingRemote) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     await Supabase.instance.client.from('deletion_log').insert({
-      'user_id': userId,
+      'shop_id': shopId,
       'deleted_at': entry.deletedAt.toUtc().toIso8601String(),
       'deleted_by': entry.deletedBy,
       'note': entry.note,
@@ -317,14 +224,13 @@ class SyncService {
   /// Full push of local inventory + store names + staff users.
   Future<void> pushAll() async {
     if (!isSignedIn) return;
-    final userId = Supabase.instance.client.auth.currentUser!.id;
     final products = await DatabaseService.instance.getAll();
     final stores = await DatabaseService.instance.getStores();
     final staff = await DatabaseService.instance.getUsers();
 
     for (final s in stores) {
       await Supabase.instance.client.from('stores').upsert({
-        'user_id': userId,
+        'shop_id': shopId,
         'store_id': s.id,
         'name': s.name,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -333,7 +239,7 @@ class SyncService {
 
     for (final u in staff) {
       await Supabase.instance.client.from('staff_users').upsert({
-        'user_id': userId,
+        'shop_id': shopId,
         'username': u.username.trim(),
         'password': u.password.trim(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -345,14 +251,13 @@ class SyncService {
       return;
     }
 
-    // Ensure every local row has a cloudId before upsert.
     final payload = <Map<String, dynamic>>[];
     for (var p in products) {
       if (p.cloudId.isEmpty) {
         p = p.copyWith(cloudId: _uuid.v4(), updatedAt: DateTime.now());
         await DatabaseService.instance.update(p, sync: false);
       }
-      payload.add(p.toRemoteMap(userId));
+      payload.add(p.toRemoteMap(shopId));
     }
     await Supabase.instance.client.from('products').upsert(payload);
     _emit('Pushed ${payload.length} product(s), ${staff.length} staff');
@@ -365,7 +270,8 @@ class SyncService {
     try {
       final client = Supabase.instance.client;
 
-      final storeRows = await client.from('stores').select();
+      final storeRows =
+          await client.from('stores').select().eq('shop_id', shopId);
       for (final row in storeRows as List) {
         final map = Map<String, dynamic>.from(row as Map);
         final id = map['store_id'] as int?;
@@ -375,7 +281,8 @@ class SyncService {
         }
       }
 
-      final staffRows = await client.from('staff_users').select();
+      final staffRows =
+          await client.from('staff_users').select().eq('shop_id', shopId);
       var staffApplied = 0;
       final remoteNames = <String>{};
       for (final row in staffRows as List) {
@@ -389,8 +296,6 @@ class SyncService {
         );
         staffApplied++;
       }
-      // After a successful cloud fetch, drop local staff removed remotely.
-      // Safe because sign-in / Push now uploads local staff before pull.
       final localStaff = await DatabaseService.instance.getUsers();
       for (final u in localStaff) {
         if (!remoteNames.contains(u.username.toLowerCase())) {
@@ -399,8 +304,11 @@ class SyncService {
         }
       }
 
-      final rows =
-          await client.from('products').select().isFilter('deleted_at', null);
+      final rows = await client
+          .from('products')
+          .select()
+          .eq('shop_id', shopId)
+          .isFilter('deleted_at', null);
       var applied = 0;
       for (final row in rows as List) {
         final remote =
@@ -410,10 +318,10 @@ class SyncService {
         applied++;
       }
 
-      // Soft-deleted remotes → remove local copies.
       final deleted = await client
           .from('products')
           .select('id')
+          .eq('shop_id', shopId)
           .not('deleted_at', 'is', null);
       for (final row in deleted as List) {
         final id = (row as Map)['id'] as String?;
@@ -422,7 +330,8 @@ class SyncService {
         }
       }
 
-      final deletionRows = await client.from('deletion_log').select();
+      final deletionRows =
+          await client.from('deletion_log').select().eq('shop_id', shopId);
       var deletions = 0;
       for (final row in deletionRows as List) {
         final map = Map<String, dynamic>.from(row as Map);
@@ -487,7 +396,7 @@ class SyncService {
   Future<void> stopRealtime() async {
     final ch = _channel;
     _channel = null;
-    if (ch != null) {
+    if (ch != null && Supabase.instance.isInitialized) {
       await Supabase.instance.client.removeChannel(ch);
     }
   }
@@ -507,6 +416,7 @@ class SyncService {
       }
       final record = payload.newRecord;
       if (record.isEmpty) return;
+      if (record['shop_id'] != null && record['shop_id'] != shopId) return;
       if (record['deleted_at'] != null) {
         final id = record['id'] as String?;
         if (id != null) {
@@ -529,6 +439,7 @@ class SyncService {
     if (_applyingRemote) return;
     final record = payload.newRecord;
     if (record.isEmpty) return;
+    if (record['shop_id'] != null && record['shop_id'] != shopId) return;
     final id = record['store_id'] as int?;
     final name = record['name'] as String? ?? '';
     if (id == null || name.isEmpty) return;
@@ -557,6 +468,7 @@ class SyncService {
       }
       final record = payload.newRecord;
       if (record.isEmpty) return;
+      if (record['shop_id'] != null && record['shop_id'] != shopId) return;
       await DatabaseService.instance.applyRemoteStaffUser(
         AppUser(
           username: record['username'] as String? ?? '',

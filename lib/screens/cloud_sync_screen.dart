@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import '../config/supabase_config.dart';
 import '../services/sync_service.dart';
 
-/// Simple on/off cloud sync. Project URL, anon key and shop account are
-/// built into the app — no typing on each phone.
+/// Simple on/off cloud sync. Project URL + anon key are built into the app.
+/// No Supabase Auth email — staff users stay under Manage users.
 class CloudSyncScreen extends StatefulWidget {
   const CloudSyncScreen({super.key});
 
@@ -105,10 +105,11 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                   const Text(
                     'Turn this on and every phone with this app shares the '
                     'same inventory and staff logins automatically.\n\n'
-                    'No email or API keys to type on the phone — those are '
-                    'built into the app.\n\n'
-                    'First time: in Supabase turn OFF Authentication → '
-                    'Providers → Email → Confirm email, then tap Connect.',
+                    'No sync email is used (avoids Supabase bounced emails). '
+                    'Staff usernames you create under Manage users are what '
+                    'people sign into the app with.\n\n'
+                    'First time only: in Supabase SQL Editor run '
+                    'schema_migrate_no_email.sql, then tap Connect.',
                     style: TextStyle(height: 1.4),
                   ),
                 ],
@@ -123,9 +124,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
               child: const Padding(
                 padding: EdgeInsets.all(12),
                 child: Text(
-                  'This APK does not include Supabase project settings yet. '
-                  'Send your Project URL and anon public key so they can be '
-                  'built into the next APK — then just flip this switch.',
+                  'This APK does not include Supabase project settings yet.',
                   style: TextStyle(height: 1.4),
                 ),
               ),
@@ -155,7 +154,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
               subtitle: Text(
                 signedIn
                     ? 'Phones will stay in sync while online'
-                    : (_status.isNotEmpty ? _status : 'Tap reconnect'),
+                    : (_status.isNotEmpty ? _status : 'Tap Connect'),
               ),
             ),
             const SizedBox(height: 8),
@@ -193,7 +192,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
           ],
           const SizedBox(height: 24),
           Text(
-            'Shop account: ${SupabaseConfig.shopEmail}',
+            'Shop id: ${SupabaseConfig.shopId} (no email)',
             style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
           ),
         ],

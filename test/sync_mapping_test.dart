@@ -21,9 +21,9 @@ void main() {
         createdBy: 'admin',
       );
 
-      final remote = local.toRemoteMap('user-abc');
+      final remote = local.toRemoteMap('expiry-check-shop');
       expect(remote['id'], local.cloudId);
-      expect(remote['user_id'], 'user-abc');
+      expect(remote['shop_id'], 'expiry-check-shop');
       expect(remote['store_id'], 2);
       expect(remote['barcode_id'], '6937035203622');
       expect(remote['deleted_at'], isNull);
