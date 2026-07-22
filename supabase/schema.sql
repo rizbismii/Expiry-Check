@@ -1,11 +1,13 @@
--- Expiry Check — Supabase schema for live multi-device sync
+-- Expiry Check — Supabase schema for live multi-device sync (NO email auth)
 -- Run this whole file once in: Project → SQL → New query → Run.
 -- Safe to re-run (idempotent).
+--
+-- Phones connect with the anon/publishable key only. No Auth users, no emails.
+-- Staff logins created in the app (Manage users) sync via staff_users.
 
--- Products (stable UUID identity across devices)
 create table if not exists public.products (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
+  shop_id text not null default 'expiry-check-shop',
   store_id integer not null default 1,
   name text not null,
   brand text not null default '',
@@ -22,22 +24,20 @@ create table if not exists public.products (
   deleted_at timestamptz
 );
 
-create index if not exists products_user_updated_idx
-  on public.products (user_id, updated_at desc);
+create index if not exists products_shop_updated_idx
+  on public.products (shop_id, updated_at desc);
 
--- Store branch names (ids 1–3 match the app's local branches)
 create table if not exists public.stores (
-  user_id uuid not null references auth.users (id) on delete cascade,
+  shop_id text not null default 'expiry-check-shop',
   store_id integer not null,
   name text not null,
   updated_at timestamptz not null default now(),
-  primary key (user_id, store_id)
+  primary key (shop_id, store_id)
 );
 
--- Deletion audit log
 create table if not exists public.deletion_log (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
+  shop_id text not null default 'expiry-check-shop',
   deleted_at timestamptz not null default now(),
   deleted_by text not null default '',
   note text not null default '',
@@ -49,13 +49,12 @@ create table if not exists public.deletion_log (
   quantity integer not null default 1
 );
 
--- Staff app logins created by admin (shared across devices via sync account)
 create table if not exists public.staff_users (
-  user_id uuid not null references auth.users (id) on delete cascade,
+  shop_id text not null default 'expiry-check-shop',
   username text not null,
   password text not null,
   updated_at timestamptz not null default now(),
-  primary key (user_id, username)
+  primary key (shop_id, username)
 );
 
 alter table public.products enable row level security;
@@ -63,59 +62,46 @@ alter table public.stores enable row level security;
 alter table public.deletion_log enable row level security;
 alter table public.staff_users enable row level security;
 
--- Recreate policies so re-runs do not fail with "already exists".
+-- Shared-shop policies (anon key in the app). Same trust model as a baked-in
+-- sync password, without sending any Auth emails.
+drop policy if exists "products_shop_all" on public.products;
 drop policy if exists "products_select_own" on public.products;
 drop policy if exists "products_insert_own" on public.products;
 drop policy if exists "products_update_own" on public.products;
 drop policy if exists "products_delete_own" on public.products;
-create policy "products_select_own" on public.products
-  for select using (auth.uid() = user_id);
-create policy "products_insert_own" on public.products
-  for insert with check (auth.uid() = user_id);
-create policy "products_update_own" on public.products
-  for update using (auth.uid() = user_id);
-create policy "products_delete_own" on public.products
-  for delete using (auth.uid() = user_id);
+create policy "products_shop_all" on public.products
+  for all using (shop_id = 'expiry-check-shop')
+  with check (shop_id = 'expiry-check-shop');
 
+drop policy if exists "stores_shop_all" on public.stores;
 drop policy if exists "stores_select_own" on public.stores;
 drop policy if exists "stores_insert_own" on public.stores;
 drop policy if exists "stores_update_own" on public.stores;
 drop policy if exists "stores_delete_own" on public.stores;
-create policy "stores_select_own" on public.stores
-  for select using (auth.uid() = user_id);
-create policy "stores_insert_own" on public.stores
-  for insert with check (auth.uid() = user_id);
-create policy "stores_update_own" on public.stores
-  for update using (auth.uid() = user_id);
-create policy "stores_delete_own" on public.stores
-  for delete using (auth.uid() = user_id);
+create policy "stores_shop_all" on public.stores
+  for all using (shop_id = 'expiry-check-shop')
+  with check (shop_id = 'expiry-check-shop');
 
+drop policy if exists "deletion_log_shop_all" on public.deletion_log;
 drop policy if exists "deletion_log_select_own" on public.deletion_log;
 drop policy if exists "deletion_log_insert_own" on public.deletion_log;
-create policy "deletion_log_select_own" on public.deletion_log
-  for select using (auth.uid() = user_id);
-create policy "deletion_log_insert_own" on public.deletion_log
-  for insert with check (auth.uid() = user_id);
+create policy "deletion_log_shop_all" on public.deletion_log
+  for all using (shop_id = 'expiry-check-shop')
+  with check (shop_id = 'expiry-check-shop');
 
+drop policy if exists "staff_users_shop_all" on public.staff_users;
 drop policy if exists "staff_users_select_own" on public.staff_users;
 drop policy if exists "staff_users_insert_own" on public.staff_users;
 drop policy if exists "staff_users_update_own" on public.staff_users;
 drop policy if exists "staff_users_delete_own" on public.staff_users;
-create policy "staff_users_select_own" on public.staff_users
-  for select using (auth.uid() = user_id);
-create policy "staff_users_insert_own" on public.staff_users
-  for insert with check (auth.uid() = user_id);
-create policy "staff_users_update_own" on public.staff_users
-  for update using (auth.uid() = user_id);
-create policy "staff_users_delete_own" on public.staff_users
-  for delete using (auth.uid() = user_id);
+create policy "staff_users_shop_all" on public.staff_users
+  for all using (shop_id = 'expiry-check-shop')
+  with check (shop_id = 'expiry-check-shop');
 
--- Needed so Realtime can send old row data on UPDATE/DELETE.
 alter table public.products replica identity full;
 alter table public.stores replica identity full;
 alter table public.staff_users replica identity full;
 
--- Add tables to Realtime only if not already members.
 do $$
 begin
   if not exists (
@@ -146,8 +132,5 @@ begin
   end if;
 exception
   when others then
-    -- Some projects block ALTER PUBLICATION from the SQL editor.
-    -- If this fails, enable Realtime manually:
-    -- Database → Publications → supabase_realtime → toggle products + stores + staff_users.
     raise notice 'Realtime publication step skipped: %', sqlerrm;
 end $$;

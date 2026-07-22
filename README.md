@@ -32,13 +32,12 @@ Data is stored **on-device in SQLite** by default — works offline and stays pr
 
 For **live multi-device sync**, enable **Settings → Cloud sync**:
 
-1. Create a free project at [supabase.com](https://supabase.com) (one-time)
-2. Run [`supabase/schema.sql`](supabase/schema.sql) in the SQL Editor (and [`schema_staff_users.sql`](supabase/schema_staff_users.sql) if needed)
-3. In Supabase: **Authentication → Providers → Email** → turn **OFF** “Confirm email”
-4. Put your **Project URL** and **anon public key** into [`lib/config/supabase_config.dart`](lib/config/supabase_config.dart) (or pass `--dart-define=SUPABASE_URL=...` / `SUPABASE_ANON_KEY=...` when building)
-5. Install that APK on every phone and flip **Enable cloud sync** — no email/password typing on the phone
+1. Create a free project at [supabase.com](https://supabase.com) (one-time), or use your existing one
+2. **Existing project:** run [`supabase/schema_migrate_no_email.sql`](supabase/schema_migrate_no_email.sql) in the SQL Editor  
+   **New project:** run [`supabase/schema.sql`](supabase/schema.sql)
+3. Install the APK and flip **Enable cloud sync → Connect**
 
-Staff usernames in the app (admin / local users) stay separate from the built-in shop sync account.
+No sync email is used (avoids Supabase bounced emails). Staff usernames created under **Manage users** are what people sign into the app with, and those sync across phones.
 
 ## Tech stack
 

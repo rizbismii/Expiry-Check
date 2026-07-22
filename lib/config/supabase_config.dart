@@ -1,10 +1,12 @@
 /// Built-in Supabase sync settings for every install of this app.
 ///
-/// Fill [url] and [anonKey] once (from Supabase → Project Settings → API).
-/// [shopEmail] / [shopPassword] are the shared cloud account — phones never
-/// type these; the app signs in automatically when sync is enabled.
+/// Only the Project URL + anon/publishable key are required. There is **no**
+/// sync email/password — that was causing bounced Supabase emails.
 ///
-/// You can also override at build time:
+/// Staff logins (admin → Manage users) are separate and still sync via the
+/// `staff_users` table. Cloud sync itself uses [shopId] with the anon key.
+///
+/// Override at build time if needed:
 /// `flutter build apk --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...`
 class SupabaseConfig {
   SupabaseConfig._();
@@ -12,7 +14,7 @@ class SupabaseConfig {
   /// Project URL, e.g. https://abcdxyz.supabase.co
   static const url = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: '', // set below in [_fallbackUrl] or via --dart-define
+    defaultValue: '',
   );
 
   /// anon / publishable public key (safe to ship in the app).
@@ -21,15 +23,10 @@ class SupabaseConfig {
     defaultValue: '',
   );
 
-  /// Shared shop sync login (not a staff username). Auto sign-in on every phone.
-  static const shopEmail = String.fromEnvironment(
-    'SUPABASE_SHOP_EMAIL',
-    defaultValue: 'expiry.check.shop@gmail.com',
-  );
-
-  static const shopPassword = String.fromEnvironment(
-    'SUPABASE_SHOP_PASSWORD',
-    defaultValue: 'ExpiryCheckShopSync1!',
+  /// Shared shop namespace for all devices of this install. Not an email.
+  static const shopId = String.fromEnvironment(
+    'SUPABASE_SHOP_ID',
+    defaultValue: 'expiry-check-shop',
   );
 
   // -------------------------------------------------------------------------
