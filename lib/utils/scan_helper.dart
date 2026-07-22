@@ -17,6 +17,7 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     {int maxShots = 3}) async {
   final picker = ImagePicker();
   final texts = <String>[];
+  final scannedBarcodes = <String>[];
 
   for (var shot = 1; shot <= maxShots; shot++) {
     String? path;
@@ -47,11 +48,15 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     if (path.isEmpty) break;
 
     texts.add(await OcrService.instance.recognizeText(path));
+    final bars = await OcrService.instance.recognizeBarcode(path);
+    if (bars != null && bars.isNotEmpty) scannedBarcodes.add(bars);
     if (shot == maxShots || !context.mounted) break;
 
     final partial = DateParser.parse(texts.join('\n'));
+    final partialBarcode = partial.barcodeId ??
+        (scannedBarcodes.isNotEmpty ? scannedBarcodes.last : null);
     final needsBottom = partial.expiryDate == null ||
-        partial.barcodeId == null ||
+        partialBarcode == null ||
         partial.prodDate == null;
 
     final more = await showDialog<bool>(
@@ -93,8 +98,14 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
     if (more != true) break;
   }
 
-  if (texts.isEmpty) return null;
+  if (texts.isEmpty && scannedBarcodes.isEmpty) return null;
   final result = DateParser.parse(texts.join('\n'));
+
+  // Prefer the ML Kit barcode-bar scan (reads the bars themselves). Fall
+  // back to OCR-parsed under-bar digits when bars were not detected.
+  final barcodeId = scannedBarcodes.isNotEmpty
+      ? scannedBarcodes.last
+      : result.barcodeId;
 
   // Self-learning brand correction from the shop's existing inventory,
   // plus built-in Salty World brands.
@@ -112,7 +123,7 @@ Future<OcrParseResult?> captureAndRecognize(BuildContext context,
   return OcrParseResult(
     expiryDate: result.expiryDate,
     prodDate: result.prodDate,
-    barcodeId: result.barcodeId,
+    barcodeId: barcodeId,
     batch: result.batch,
     brand: brand,
     productName: result.productName,
@@ -131,8 +142,8 @@ Future<String?> _maybeCrop(BuildContext context, String sourcePath,
     builder: (context) => AlertDialog(
       title: Text(shot == 1 ? 'Crop label?' : 'Crop photo $shot?'),
       content: const Text(
-        'Cropping to just the text (barcode, dates, brand) improves scan '
-        'accuracy. Or use the full photo as taken.',
+        'Crop to the barcode bars and the numbers under them (plus PRO/EXP '
+        'if visible). Cropping out the numbers makes Barcode ID empty.',
       ),
       actions: [
         TextButton(

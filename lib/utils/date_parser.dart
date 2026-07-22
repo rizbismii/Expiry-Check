@@ -72,8 +72,10 @@ class DateParser {
   );
 
   /// Retail barcode printed under the bars, e.g. "6 937035 203622".
+  /// Matches as a substring (not whole-line) and tolerates OCR letter digits.
   static final _spacedBarcodeLine = RegExp(
-    r'^\s*(\d)\s+(\d{5,6})\s+(\d{5,6})\s*$',
+    r'(?<![0-9A-Za-z])([0-9OIlZSBgqo|])\s+([0-9OIlZSBgqo|]{5,6})\s+([0-9OIlZSBgqo|]{5,6})(?:\s+([0-9OIlZSBgqo|]))?(?![0-9A-Za-z])',
+    caseSensitive: false,
   );
 
   static final _batchPattern = RegExp(
@@ -671,12 +673,14 @@ class DateParser {
 
   static bool _isBarcodeOnlyLine(String line) {
     final spaced = _spacedBarcodeLine.firstMatch(line);
-    if (spaced != null) return true;
+    if (spaced != null) {
+      final digits = _ocrNormalizeDigits(
+        '${spaced.group(1)}${spaced.group(2)}${spaced.group(3)}${spaced.group(4) ?? ''}',
+      );
+      if (_isPlausibleBarcode(digits)) return true;
+    }
     final digits = _ocrNormalizeDigits(line);
-    final nonSpace = line.replaceAll(RegExp(r'\s'), '');
-    final mostlyDigits = nonSpace.isNotEmpty &&
-        RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false).hasMatch(nonSpace);
-    return mostlyDigits && _isPlausibleBarcode(digits);
+    return _isPlausibleBarcode(digits);
   }
 
   /// Labelled barcode / EAN / UPC, including spaced digits printed under the
@@ -698,66 +702,123 @@ class DateParser {
       uniqueLines.add(line.trim());
     }
 
+    // Also try joining 2 adjacent short digit-heavy lines
+    // (OCR often splits "6 937035" / "203622").
+    final joinCandidates = <String>[];
+    for (var i = 0; i < uniqueLines.length - 1; i++) {
+      final a = uniqueLines[i];
+      final b = uniqueLines[i + 1];
+      final da = _ocrNormalizeDigits(a);
+      final db = _ocrNormalizeDigits(b);
+      if (da.isNotEmpty &&
+          da.length <= 8 &&
+          db.length >= 4 &&
+          db.length <= 8 &&
+          da.length + db.length >= 12 &&
+          da.length + db.length <= 14) {
+        joinCandidates.add('$a $b');
+      }
+    }
+
     String? best;
     var bestScore = -1;
-    for (var i = 0; i < uniqueLines.length; i++) {
-      final line = uniqueLines[i];
-      if (_expiryKeywords.hasMatch(line) ||
-          _mfgKeywords.hasMatch(line) ||
-          _batchPattern.hasMatch(line) ||
-          _licenceLine(line) ||
-          _alyBatchPattern.hasMatch(line)) {
-        continue;
+
+    void consider(String? digits, int score, {int lineIndex = -1}) {
+      if (digits == null || !_isPlausibleBarcode(digits)) return;
+      if (_looksLikeCompactDate(digits)) return;
+      if (digits.length == 10) return; // licence-sized
+
+      var s = score;
+      if (digits.length == 13) s += 15;
+      if (digits.length == 12) s += 10;
+      if (_hasValidEanCheckDigit(digits)) s += 25;
+
+      if (lineIndex >= 0) {
+        final nearDate = [lineIndex + 1, lineIndex + 2, lineIndex - 1].any((j) =>
+            j >= 0 &&
+            j < uniqueLines.length &&
+            (_expiryKeywords.hasMatch(uniqueLines[j]) ||
+                _mfgKeywords.hasMatch(uniqueLines[j])));
+        if (nearDate) s += 20;
       }
 
-      String? digits;
-      var score = 0;
-
-      final spaced = _spacedBarcodeLine.firstMatch(line);
-      if (spaced != null) {
-        digits = '${spaced.group(1)}${spaced.group(2)}${spaced.group(3)}';
-        score += 50; // classic under-bars layout
-      } else {
-        final normalized = _ocrNormalizeDigits(line);
-        final nonSpace = line.replaceAll(RegExp(r'\s'), '');
-        final mostlyDigits = nonSpace.isNotEmpty &&
-            RegExp(r'^[0-9OIlZSBgqo|]+$', caseSensitive: false)
-                .hasMatch(nonSpace);
-        if (mostlyDigits && _isPlausibleBarcode(normalized)) {
-          digits = normalized;
-          score += 20;
-        } else {
-          final m = RegExp(r'\b(\d{12,14})\b').firstMatch(line);
-          if (m != null) {
-            digits = m.group(1);
-            score += 10;
-          }
-        }
-      }
-
-      if (digits == null || !_isPlausibleBarcode(digits)) continue;
-      if (_looksLikeCompactDate(digits)) continue;
-      // Manufacture licence numbers are typically 10 digits.
-      if (digits.length == 10) continue;
-
-      if (digits.length == 13) score += 15;
-      if (digits.length == 12) score += 10;
-      if (_hasValidEanCheckDigit(digits)) score += 25;
-
-      // Prefer the digit line that sits just above PRO/EXP on the panel.
-      final nearDate = [i + 1, i + 2, i - 1].any((j) =>
-          j >= 0 &&
-          j < uniqueLines.length &&
-          (_expiryKeywords.hasMatch(uniqueLines[j]) ||
-              _mfgKeywords.hasMatch(uniqueLines[j])));
-      if (nearDate) score += 20;
-
-      if (score > bestScore) {
-        bestScore = score;
+      if (s > bestScore) {
+        bestScore = s;
         best = digits;
       }
     }
+
+    for (var i = 0; i < uniqueLines.length; i++) {
+      final line = uniqueLines[i];
+      // Mine digits even when PRO/EXP/batch share the same OCR line.
+      for (final hit in _barcodeCandidatesInLine(line)) {
+        consider(hit.$1, hit.$2, lineIndex: i);
+      }
+    }
+    for (final joined in joinCandidates) {
+      for (final hit in _barcodeCandidatesInLine(joined)) {
+        consider(hit.$1, hit.$2 + 15);
+      }
+    }
+
     return best;
+  }
+
+  /// Extract scored barcode digit candidates from one OCR line.
+  /// Returns list of (digits, baseScore).
+  static List<(String, int)> _barcodeCandidatesInLine(String line) {
+    final out = <(String, int)>[];
+    final spaced = _spacedBarcodeLine.allMatches(line);
+    for (final m in spaced) {
+      final digits = _ocrNormalizeDigits(
+        '${m.group(1)}${m.group(2)}${m.group(3)}${m.group(4) ?? ''}',
+      );
+      if (_isPlausibleBarcode(digits)) out.add((digits, 50));
+    }
+
+    // Drop PRO/EXP/batch/licence tails so glued lines still yield the EAN.
+    var working = line;
+    working = working.replaceAll(
+      RegExp(
+        r'\b(?:pr[o0]|exp|mfg|mfd)\b\s*[:.\-]?\s*[0-9OIlZSBgqo|\s]{4,20}',
+        caseSensitive: false,
+      ),
+      ' ',
+    );
+    working = working.replaceAll(_batchPattern, ' ');
+    working = working.replaceAll(_alyBatchPattern, ' ');
+    working = working.replaceAll(
+      RegExp(r'manufacture\s+licence[^\n]*', caseSensitive: false),
+      ' ',
+    );
+    working = working.replaceAll(RegExp(r'[^\w\s]'), ' ');
+
+    final normalized = _ocrNormalizeDigits(working);
+    if (_isPlausibleBarcode(normalized)) {
+      out.add((normalized, 30));
+    } else if (normalized.length >= 12) {
+      for (final len in [13, 12, 14]) {
+        for (var i = 0; i + len <= normalized.length; i++) {
+          final slice = normalized.substring(i, i + len);
+          if (!_isPlausibleBarcode(slice) || _looksLikeCompactDate(slice)) {
+            continue;
+          }
+          // Prefer check-digit-valid slices; skip weak windows that look
+          // like two compact dates stuck together.
+          final score = _hasValidEanCheckDigit(slice) ? 35 : 8;
+          if (score >= 35 || _spacedBarcodeLine.hasMatch(line)) {
+            out.add((slice, score));
+          }
+        }
+      }
+    }
+
+    for (final m in RegExp(r'\d{12,14}').allMatches(working)) {
+      final digits = m.group(0)!;
+      if (_isPlausibleBarcode(digits)) out.add((digits, 10));
+    }
+
+    return out;
   }
 
   /// Retail barcodes are 12–14 digits. 8-digit values are almost always dates.

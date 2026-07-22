@@ -347,5 +347,50 @@ ALY32 250319
       expect(r.expiryDate, DateTime(2027, 3, 18));
       expect(r.barcodeId, '6937035203622');
     });
+
+    test('barcode glued to PRO on same OCR line', () {
+      const label = '''
+SALTY PUFF WORLD
+BERRY
+10 mg/mL
+6 937035 203622 PRO: 19032025
+EXP: 18032027
+ALY32 250319
+Manufacture licence number: 4144030056
+''';
+      final r = DateParser.parse(label);
+      expect(r.barcodeId, '6937035203622');
+      expect(r.prodDate, DateTime(2025, 3, 19));
+      expect(r.expiryDate, DateTime(2027, 3, 18));
+    });
+
+    test('hyphenated / punctuated / embedded barcode OCR', () {
+      expect(DateParser.parse('6-937035-203622').barcodeId, '6937035203622');
+      expect(DateParser.parse('6 937035 203622.').barcodeId, '6937035203622');
+      expect(
+          DateParser.parse('*6 937035 203622*').barcodeId, '6937035203622');
+      expect(DateParser.parse('code 6 937035 203622 here').barcodeId,
+          '6937035203622');
+    });
+
+    test('barcode split across two OCR lines', () {
+      const label = '''
+6 937035
+203622
+PRO: 19032025
+EXP: 18032027
+''';
+      final r = DateParser.parse(label);
+      expect(r.barcodeId, '6937035203622');
+    });
+
+    test('barcode-only noisy photo text', () {
+      const label = '''
+||I||
+6 937O35 203622
+.
+''';
+      expect(DateParser.parse(label).barcodeId, '6937035203622');
+    });
   });
 }
