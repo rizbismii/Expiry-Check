@@ -110,8 +110,8 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                     'Turn this on once. Phones share inventory and staff '
                     'logins automatically — no Connect, Push or Pull.\n\n'
                     'Staff usernames stay under Manage users (not an email).\n\n'
-                    'First time only: run schema_migrate_no_email.sql in the '
-                    'Supabase SQL Editor, then flip this switch.',
+                    'First time only: run schema_fix_userid_null.sql in the '
+                    'Supabase SQL Editor, then flip this switch off and on.',
                     style: TextStyle(height: 1.4),
                   ),
                 ],
