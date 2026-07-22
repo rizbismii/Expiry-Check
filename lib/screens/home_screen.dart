@@ -59,7 +59,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
     NotificationService.instance.requestPermissions();
     _syncSub = SyncService.instance.statusStream.listen((msg) {
-      if (msg.contains('Synced') || msg.contains('Pulled')) {
+      if (msg.contains('Synced') ||
+          msg.contains('Pulled') ||
+          msg.contains('Pushed') ||
+          msg.contains('Live sync')) {
         _load();
       }
     });

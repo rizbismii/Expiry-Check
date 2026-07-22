@@ -128,8 +128,8 @@ class SyncService {
     } catch (e) {
       throw Exception(
         'Could not reach the shop sync tables. In Supabase SQL Editor run '
-        'supabase/schema_migrate_no_email.sql (or schema.sql on a fresh '
-        'project), then tap Connect again.\n\nDetails: $e',
+        'schema_migrate_no_email.sql once, then turn Cloud sync off and on '
+        'again.\n\nDetails: $e',
       );
     }
 
