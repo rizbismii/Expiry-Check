@@ -5,8 +5,7 @@ import 'package:flutter/material.dart';
 import '../config/supabase_config.dart';
 import '../services/sync_service.dart';
 
-/// Simple on/off cloud sync. Project URL + anon key are built into the app.
-/// No Supabase Auth email — staff users stay under Manage users.
+/// One-switch cloud sync. Connecting, push and pull are automatic.
 class CloudSyncScreen extends StatefulWidget {
   const CloudSyncScreen({super.key});
 
@@ -19,6 +18,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
   bool _busy = false;
   bool _canConnect = false;
   String _status = '';
+  String? _lastError;
   StreamSubscription<String>? _statusSub;
 
   @override
@@ -26,7 +26,17 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     super.initState();
     _load();
     _statusSub = SyncService.instance.statusStream.listen((msg) {
-      if (mounted) setState(() => _status = msg);
+      if (!mounted) return;
+      setState(() {
+        _status = msg;
+        if (msg.toLowerCase().contains('fail') ||
+            msg.toLowerCase().contains('error')) {
+          _lastError = msg;
+        } else if (msg.toLowerCase().contains('live sync on') ||
+            msg.toLowerCase().contains('listening')) {
+          _lastError = null;
+        }
+      });
     });
   }
 
@@ -38,21 +48,27 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
       _enabled = enabled;
       _canConnect = canConnect;
       if (SyncService.instance.isSignedIn) {
-        _status = 'Live sync on';
+        _status = 'Auto sync is on';
+        _lastError = null;
       } else if (enabled) {
-        _status = 'Enabled — connecting…';
+        _status = 'Turning sync on…';
       } else {
         _status = 'Cloud sync off';
       }
     });
   }
 
-  Future<void> _run(Future<void> Function() action) async {
-    setState(() => _busy = true);
+  Future<void> _toggle(bool value) async {
+    setState(() {
+      _busy = true;
+      _lastError = null;
+    });
     try {
-      await action();
+      await SyncService.instance.setEnabled(value);
+      if (mounted) setState(() => _enabled = value);
     } catch (e) {
       if (mounted) {
+        setState(() => _lastError = '$e');
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(SnackBar(content: Text('$e')));
@@ -65,18 +81,6 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     }
   }
 
-  Future<void> _toggle(bool value) => _run(() async {
-        await SyncService.instance.setEnabled(value);
-        setState(() => _enabled = value);
-      });
-
-  Future<void> _reconnect() =>
-      _run(() => SyncService.instance.connectAndSync());
-
-  Future<void> _push() => _run(() => SyncService.instance.pushAll());
-
-  Future<void> _pull() => _run(() => SyncService.instance.pullAll());
-
   @override
   void dispose() {
     _statusSub?.cancel();
@@ -85,7 +89,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final signedIn = SyncService.instance.isSignedIn;
+    final live = SyncService.instance.isSignedIn;
     final ready = _canConnect || SyncService.instance.hasBuiltInConfig;
     return Scaffold(
       appBar: AppBar(title: const Text('Cloud sync')),
@@ -99,17 +103,15 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Multi-device sync',
+                  Text('Auto multi-device sync',
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   const Text(
-                    'Turn this on and every phone with this app shares the '
-                    'same inventory and staff logins automatically.\n\n'
-                    'No sync email is used (avoids Supabase bounced emails). '
-                    'Staff usernames you create under Manage users are what '
-                    'people sign into the app with.\n\n'
-                    'First time only: in Supabase SQL Editor run '
-                    'schema_migrate_no_email.sql, then tap Connect.',
+                    'Turn this on once. Phones share inventory and staff '
+                    'logins automatically — no Connect, Push or Pull.\n\n'
+                    'Staff usernames stay under Manage users (not an email).\n\n'
+                    'First time only: run schema_migrate_no_email.sql in the '
+                    'Supabase SQL Editor, then flip this switch.',
                     style: TextStyle(height: 1.4),
                   ),
                 ],
@@ -136,63 +138,53 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             title: const Text('Enable cloud sync'),
             subtitle: Text(
               ready
-                  ? 'Uses the shop project built into this app'
+                  ? (live
+                      ? 'Live — changes sync automatically'
+                      : 'Uses the shop project built into this app')
                   : 'Waiting for built-in project settings',
             ),
             value: _enabled,
             onChanged: (_busy || !ready) ? null : _toggle,
           ),
-          if (_enabled) ...[
-            const SizedBox(height: 8),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(
-                signedIn ? Icons.cloud_done : Icons.cloud_off,
-                color: signedIn ? Colors.green : Colors.grey,
-              ),
-              title: Text(signedIn ? 'Connected' : 'Not connected'),
-              subtitle: Text(
-                signedIn
-                    ? 'Phones will stay in sync while online'
-                    : (_status.isNotEmpty ? _status : 'Tap Connect'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            FilledButton.icon(
-              onPressed: _busy ? null : _reconnect,
-              icon: const Icon(Icons.sync),
-              label: Text(signedIn ? 'Sync now' : 'Connect'),
-            ),
-            if (signedIn) ...[
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _busy ? null : _pull,
-                      icon: const Icon(Icons.cloud_download),
-                      label: const Text('Pull'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _busy ? null : _push,
-                      icon: const Icon(Icons.cloud_upload),
-                      label: const Text('Push'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
+          if (_busy) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
           ],
-          if (_status.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(
+              live ? Icons.cloud_done : Icons.cloud_off,
+              color: live ? Colors.green : Colors.grey,
+            ),
+            title: Text(live ? 'Auto sync on' : 'Not syncing'),
+            subtitle: Text(
+              live
+                  ? 'Adds, edits and deletes sync live across phones'
+                  : (_status.isNotEmpty ? _status : 'Turn the switch on'),
+            ),
+          ),
+          if (_lastError != null) ...[
+            const SizedBox(height: 8),
+            Card(
+              margin: EdgeInsets.zero,
+              color: Colors.red.shade50,
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  _lastError!,
+                  style: TextStyle(color: Colors.red.shade900, height: 1.35),
+                ),
+              ),
+            ),
+          ],
+          if (_status.isNotEmpty && live) ...[
             const SizedBox(height: 16),
             Text(_status, style: TextStyle(color: Colors.grey.shade800)),
           ],
           const SizedBox(height: 24),
           Text(
-            'Shop id: ${SupabaseConfig.shopId} (no email)',
+            'Shop id: ${SupabaseConfig.shopId}',
             style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
           ),
         ],

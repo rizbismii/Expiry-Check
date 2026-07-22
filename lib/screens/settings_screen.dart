@@ -462,8 +462,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     leading: const Icon(Icons.sync),
                     title: const Text('Cloud sync'),
                     subtitle: Text(SyncService.instance.isSignedIn
-                        ? 'On — phones share inventory live'
-                        : 'One switch — no email to type on the phone'),
+                        ? 'Auto sync on'
+                        : 'One switch — changes sync automatically'),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () async {
                       await Navigator.of(context).push(
