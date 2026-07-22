@@ -44,6 +44,8 @@ class SyncService {
 
   String get shopId => SupabaseConfig.shopId;
 
+  String get _legacyUserId => SupabaseConfig.legacyUserId;
+
   /// True when built-in config or legacy saved prefs can connect.
   Future<bool> get canConnect async {
     final (url, key) = await _resolveCredentials();
@@ -159,7 +161,7 @@ class SyncService {
         await DatabaseService.instance.ensurePersistedCloudId(product);
     await Supabase.instance.client
         .from('products')
-        .upsert(toSend.toRemoteMap(shopId));
+        .upsert(toSend.toRemoteMap(shopId, legacyUserId: _legacyUserId));
   }
 
   /// Soft-delete on the server so other devices drop the row.
@@ -177,6 +179,7 @@ class SyncService {
     if (!isSignedIn || _applyingRemote) return;
     await Supabase.instance.client.from('stores').upsert({
       'shop_id': shopId,
+      'user_id': _legacyUserId,
       'store_id': store.id,
       'name': store.name,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -190,6 +193,7 @@ class SyncService {
     if (username.isEmpty || password.isEmpty) return;
     await Supabase.instance.client.from('staff_users').upsert({
       'shop_id': shopId,
+      'user_id': _legacyUserId,
       'username': username,
       'password': password,
       'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -209,6 +213,7 @@ class SyncService {
     if (!isSignedIn || _applyingRemote) return;
     await Supabase.instance.client.from('deletion_log').insert({
       'shop_id': shopId,
+      'user_id': _legacyUserId,
       'deleted_at': entry.deletedAt.toUtc().toIso8601String(),
       'deleted_by': entry.deletedBy,
       'note': entry.note,
@@ -231,6 +236,7 @@ class SyncService {
     for (final s in stores) {
       await Supabase.instance.client.from('stores').upsert({
         'shop_id': shopId,
+        'user_id': _legacyUserId,
         'store_id': s.id,
         'name': s.name,
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -240,6 +246,7 @@ class SyncService {
     for (final u in staff) {
       await Supabase.instance.client.from('staff_users').upsert({
         'shop_id': shopId,
+        'user_id': _legacyUserId,
         'username': u.username.trim(),
         'password': u.password.trim(),
         'updated_at': DateTime.now().toUtc().toIso8601String(),
@@ -257,7 +264,7 @@ class SyncService {
         p = p.copyWith(cloudId: _uuid.v4(), updatedAt: DateTime.now());
         await DatabaseService.instance.update(p, sync: false);
       }
-      payload.add(p.toRemoteMap(shopId));
+      payload.add(p.toRemoteMap(shopId, legacyUserId: _legacyUserId));
     }
     await Supabase.instance.client.from('products').upsert(payload);
     _emit('Pushed ${payload.length} product(s), ${staff.length} staff');

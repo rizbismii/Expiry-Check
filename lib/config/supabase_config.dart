@@ -29,6 +29,10 @@ class SupabaseConfig {
     defaultValue: 'expiry-check-shop',
   );
 
+  /// Placeholder for legacy `user_id` columns that are still NOT NULL after a
+  /// partial migration. Not a real Auth user — shop_id is what scopes data.
+  static const legacyUserId = '00000000-0000-4000-8000-000000000001';
+
   // -------------------------------------------------------------------------
   // Paste your project values here once (or use --dart-define when building).
   // -------------------------------------------------------------------------

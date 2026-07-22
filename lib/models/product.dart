@@ -116,10 +116,11 @@ class Product {
   }
 
   /// Row payload for Supabase upsert (snake_case columns).
-  Map<String, dynamic> toRemoteMap(String shopId) {
+  Map<String, dynamic> toRemoteMap(String shopId, {String? legacyUserId}) {
     return {
       'id': cloudId,
       'shop_id': shopId,
+      if (legacyUserId != null) 'user_id': legacyUserId,
       'store_id': storeId,
       'name': name,
       'brand': brand,
