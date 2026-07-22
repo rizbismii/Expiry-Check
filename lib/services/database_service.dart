@@ -247,7 +247,10 @@ class DatabaseService {
           await SyncService.instance.upsertStaffUser(
             AppUser(username: trimmedName, password: trimmedPass),
           );
-        } catch (_) {}
+        } catch (_) {
+          // Local user is kept so they can sign in on this phone.
+          // pushAll on the next sync cycle retries the cloud write.
+        }
       }
       return null;
     } on DatabaseException {
@@ -268,7 +271,9 @@ class DatabaseService {
         try {
           await SyncService.instance
               .upsertStaffUser(AppUser.fromMap(rows.first));
-        } catch (_) {}
+        } catch (_) {
+          // Local password is updated; next pushAll retries cloud.
+        }
       }
     }
   }

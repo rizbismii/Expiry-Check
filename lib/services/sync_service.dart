@@ -53,9 +53,13 @@ class SyncService {
   }
 
   /// Call once at app start after [WidgetsFlutterBinding.ensureInitialized].
+  /// Cloud sync stays on automatically whenever built-in config is present.
   Future<void> initialize() async {
     final prefs = await SharedPreferences.getInstance();
-    final enabled = prefs.getBool(_prefEnabled) ?? false;
+    if (SupabaseConfig.isBuiltIn) {
+      await prefs.setBool(_prefEnabled, true);
+    }
+    final enabled = prefs.getBool(_prefEnabled) ?? SupabaseConfig.isBuiltIn;
     if (!enabled) {
       _initialized = false;
       _connected = false;
@@ -88,8 +92,16 @@ class SyncService {
     _initialized = true;
   }
 
-  /// Turn sync on/off. When enabling, connects with built-in project settings.
+  /// Turn sync on/off. Built-in builds keep sync always on (cannot disable).
   Future<void> setEnabled(bool enabled) async {
+    if (SupabaseConfig.isBuiltIn && !enabled) {
+      // Always-on: ignore attempts to turn cloud sync off.
+      if (!isSignedIn) {
+        await connectAndSync();
+      }
+      _emit('Auto sync is always on');
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_prefEnabled, enabled);
     if (!enabled) {
@@ -103,6 +115,7 @@ class SyncService {
   }
 
   Future<bool> isEnabled() async {
+    if (SupabaseConfig.isBuiltIn) return true;
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool(_prefEnabled) ?? false;
   }
@@ -130,8 +143,8 @@ class SyncService {
     } catch (e) {
       throw Exception(
         'Could not reach the shop sync tables. In Supabase SQL Editor run '
-        'schema_migrate_no_email.sql once, then turn Cloud sync off and on '
-        'again.\n\nDetails: $e',
+        'schema_fix_userid_null.sql once, then restart the app.\n\n'
+        'Details: $e',
       );
     }
 
@@ -187,17 +200,51 @@ class SyncService {
   }
 
   Future<void> upsertStaffUser(AppUser user) async {
-    if (!isSignedIn || _applyingRemote) return;
+    if (_applyingRemote) return;
+    if (!isSignedIn) {
+      // Ensure cloud is up so admin-created users are available on other phones.
+      try {
+        await connectAndSync();
+      } catch (_) {
+        return;
+      }
+    }
+    if (!isSignedIn) return;
     final username = user.username.trim();
     final password = user.password.trim();
     if (username.isEmpty || password.isEmpty) return;
-    await Supabase.instance.client.from('staff_users').upsert({
+    await _upsertStaffRow(username, password);
+  }
+
+  Future<void> _upsertStaffRow(String username, String password) async {
+    final updatedAt = DateTime.now().toUtc().toIso8601String();
+    final withUserId = {
       'shop_id': shopId,
       'user_id': _legacyUserId,
       'username': username,
       'password': password,
-      'updated_at': DateTime.now().toUtc().toIso8601String(),
-    });
+      'updated_at': updatedAt,
+    };
+    final withoutUserId = {
+      'shop_id': shopId,
+      'username': username,
+      'password': password,
+      'updated_at': updatedAt,
+    };
+    try {
+      await Supabase.instance.client
+          .from('staff_users')
+          .upsert(withUserId, onConflict: 'shop_id,username');
+    } catch (_) {
+      // Fresh schema has no user_id; legacy PK may differ — retry simply.
+      try {
+        await Supabase.instance.client.from('staff_users').upsert(withUserId);
+      } catch (_) {
+        await Supabase.instance.client
+            .from('staff_users')
+            .upsert(withoutUserId, onConflict: 'shop_id,username');
+      }
+    }
   }
 
   Future<void> deleteStaffUser(String username) async {
@@ -207,6 +254,36 @@ class SyncService {
         .delete()
         .eq('shop_id', shopId)
         .ilike('username', username.trim());
+  }
+
+  /// Pull only staff users (used before login so new accounts are available).
+  Future<void> pullStaffUsers() async {
+    if (!isSignedIn) {
+      try {
+        await connectAndSync();
+      } catch (_) {
+        return;
+      }
+    }
+    if (!isSignedIn) return;
+    _applyingRemote = true;
+    try {
+      final staffRows = await Supabase.instance.client
+          .from('staff_users')
+          .select()
+          .eq('shop_id', shopId);
+      for (final row in staffRows as List) {
+        final map = Map<String, dynamic>.from(row as Map);
+        final username = (map['username'] as String? ?? '').trim();
+        final password = (map['password'] as String? ?? '').trim();
+        if (username.isEmpty || password.isEmpty) continue;
+        await DatabaseService.instance.applyRemoteStaffUser(
+          AppUser(username: username, password: password),
+        );
+      }
+    } finally {
+      _applyingRemote = false;
+    }
   }
 
   Future<void> pushDeletion(DeletionEntry entry) async {
@@ -244,13 +321,7 @@ class SyncService {
     }
 
     for (final u in staff) {
-      await Supabase.instance.client.from('staff_users').upsert({
-        'shop_id': shopId,
-        'user_id': _legacyUserId,
-        'username': u.username.trim(),
-        'password': u.password.trim(),
-        'updated_at': DateTime.now().toUtc().toIso8601String(),
-      });
+      await _upsertStaffRow(u.username.trim(), u.password.trim());
     }
 
     if (products.isEmpty) {
@@ -288,27 +359,21 @@ class SyncService {
         }
       }
 
+      // Merge remote staff into local SQLite. Do NOT delete local-only users
+      // here — an empty/failed remote read used to wipe admin-created logins.
+      // Removals only happen via explicit delete + realtime DELETE events.
       final staffRows =
           await client.from('staff_users').select().eq('shop_id', shopId);
       var staffApplied = 0;
-      final remoteNames = <String>{};
       for (final row in staffRows as List) {
         final map = Map<String, dynamic>.from(row as Map);
         final username = (map['username'] as String? ?? '').trim();
         final password = (map['password'] as String? ?? '').trim();
-        if (username.isEmpty) continue;
-        remoteNames.add(username.toLowerCase());
+        if (username.isEmpty || password.isEmpty) continue;
         await DatabaseService.instance.applyRemoteStaffUser(
           AppUser(username: username, password: password),
         );
         staffApplied++;
-      }
-      final localStaff = await DatabaseService.instance.getUsers();
-      for (final u in localStaff) {
-        if (!remoteNames.contains(u.username.toLowerCase())) {
-          await DatabaseService.instance
-              .deleteStaffUserByUsername(u.username);
-        }
       }
 
       final rows = await client

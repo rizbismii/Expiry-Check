@@ -41,7 +41,7 @@ class _UsersScreenState extends State<UsersScreen> {
       return;
     }
     await _load();
-    _snack('User "${result.$1}" created.');
+    _snack('User "${result.$1}" created — they can sign in now.');
   }
 
   Future<void> _editPassword(AppUser user) async {

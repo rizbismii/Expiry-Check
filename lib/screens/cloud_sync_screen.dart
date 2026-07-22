@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import '../config/supabase_config.dart';
 import '../services/sync_service.dart';
 
-/// One-switch cloud sync. Connecting, push and pull are automatic.
+/// Always-on cloud sync status. Connecting, push and pull are automatic.
 class CloudSyncScreen extends StatefulWidget {
   const CloudSyncScreen({super.key});
 
@@ -14,7 +14,6 @@ class CloudSyncScreen extends StatefulWidget {
 }
 
 class _CloudSyncScreenState extends State<CloudSyncScreen> {
-  bool _enabled = false;
   bool _busy = false;
   bool _canConnect = false;
   String _status = '';
@@ -33,7 +32,8 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             msg.toLowerCase().contains('error')) {
           _lastError = msg;
         } else if (msg.toLowerCase().contains('live sync on') ||
-            msg.toLowerCase().contains('listening')) {
+            msg.toLowerCase().contains('listening') ||
+            msg.toLowerCase().contains('always on')) {
           _lastError = null;
         }
       });
@@ -41,31 +41,26 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
   }
 
   Future<void> _load() async {
-    final enabled = await SyncService.instance.isEnabled();
     final canConnect = await SyncService.instance.canConnect;
     if (!mounted) return;
     setState(() {
-      _enabled = enabled;
       _canConnect = canConnect;
       if (SyncService.instance.isSignedIn) {
         _status = 'Auto sync is on';
         _lastError = null;
-      } else if (enabled) {
-        _status = 'Turning sync on…';
       } else {
-        _status = 'Cloud sync off';
+        _status = 'Connecting…';
       }
     });
   }
 
-  Future<void> _toggle(bool value) async {
+  Future<void> _reconnect() async {
     setState(() {
       _busy = true;
       _lastError = null;
     });
     try {
-      await SyncService.instance.setEnabled(value);
-      if (mounted) setState(() => _enabled = value);
+      await SyncService.instance.setEnabled(true);
     } catch (e) {
       if (mounted) {
         setState(() => _lastError = '$e');
@@ -107,11 +102,11 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                       style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   const Text(
-                    'Turn this on once. Phones share inventory and staff '
-                    'logins automatically — no Connect, Push or Pull.\n\n'
+                    'Cloud sync stays on automatically. Phones share '
+                    'inventory and staff logins — no Connect, Push or Pull.\n\n'
                     'Staff usernames stay under Manage users (not an email).\n\n'
                     'First time only: run schema_fix_userid_null.sql in the '
-                    'Supabase SQL Editor, then flip this switch off and on.',
+                    'Supabase SQL Editor, then reopen the app.',
                     style: TextStyle(height: 1.4),
                   ),
                 ],
@@ -133,37 +128,33 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
             ),
             const SizedBox(height: 16),
           ],
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Enable cloud sync'),
-            subtitle: Text(
-              ready
-                  ? (live
-                      ? 'Live — changes sync automatically'
-                      : 'Uses the shop project built into this app')
-                  : 'Waiting for built-in project settings',
-            ),
-            value: _enabled,
-            onChanged: (_busy || !ready) ? null : _toggle,
-          ),
-          if (_busy) ...[
-            const SizedBox(height: 12),
-            const LinearProgressIndicator(),
-          ],
-          const SizedBox(height: 12),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(
               live ? Icons.cloud_done : Icons.cloud_off,
               color: live ? Colors.green : Colors.grey,
             ),
-            title: Text(live ? 'Auto sync on' : 'Not syncing'),
+            title: Text(live ? 'Auto sync on' : 'Not connected yet'),
             subtitle: Text(
               live
-                  ? 'Adds, edits and deletes sync live across phones'
-                  : (_status.isNotEmpty ? _status : 'Turn the switch on'),
+                  ? 'Always on — adds, edits, deletes and staff logins sync live'
+                  : (_status.isNotEmpty
+                      ? _status
+                      : 'Waiting to connect to the shop project'),
             ),
           ),
+          if (_busy) ...[
+            const SizedBox(height: 12),
+            const LinearProgressIndicator(),
+          ],
+          if (!live && ready) ...[
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _busy ? null : _reconnect,
+              icon: const Icon(Icons.cloud_sync),
+              label: const Text('Connect now'),
+            ),
+          ],
           if (_lastError != null) ...[
             const SizedBox(height: 8),
             Card(

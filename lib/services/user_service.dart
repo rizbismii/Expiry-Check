@@ -1,6 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database_service.dart';
+import 'sync_service.dart';
 
 /// Username + password sign-in, fully on-device.
 ///
@@ -34,6 +35,10 @@ class UserService {
 
   /// Validates credentials against the admin account or the staff users the
   /// admin created. Saves the session on success.
+  ///
+  /// Staff accounts are checked locally first. If that fails, staff rows are
+  /// refreshed from cloud sync once, then checked again — so a user created
+  /// on another phone can sign in after sync catches up.
   Future<bool> signIn(String username, String password) async {
     final typed = username.trim();
     final pass = password.trim();
@@ -42,7 +47,14 @@ class UserService {
       await _saveSession(adminUsername, isAdmin: true);
       return true;
     }
-    final user = await DatabaseService.instance.findUser(typed, pass);
+
+    var user = await DatabaseService.instance.findUser(typed, pass);
+    if (user == null) {
+      try {
+        await SyncService.instance.pullStaffUsers();
+      } catch (_) {}
+      user = await DatabaseService.instance.findUser(typed, pass);
+    }
     if (user == null) return false;
     await _saveSession(user.username, isAdmin: false);
     return true;
