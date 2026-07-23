@@ -91,6 +91,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       });
 
   Future<void> _renameStore(Store store) async {
+    if (!_isAdmin) {
+      _snack('Only the admin can rename store branches.');
+      return;
+    }
     final controller = TextEditingController(text: store.name);
     final newName = await showDialog<String>(
       context: context,
@@ -311,9 +315,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ListTile(
                           leading: const Icon(Icons.store),
                           title: Text(_stores[i].name),
-                          subtitle: const Text('Tap to rename'),
-                          trailing: const Icon(Icons.edit_outlined),
-                          onTap: _busy ? null : () => _renameStore(_stores[i]),
+                          subtitle: Text(
+                            _isAdmin
+                                ? 'Tap to rename'
+                                : 'Only admin can rename branches',
+                          ),
+                          trailing: _isAdmin
+                              ? const Icon(Icons.edit_outlined)
+                              : null,
+                          onTap: (!_isAdmin || _busy)
+                              ? null
+                              : () => _renameStore(_stores[i]),
                         ),
                       ],
                     ],

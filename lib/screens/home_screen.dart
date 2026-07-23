@@ -464,17 +464,44 @@ class _HomeScreenState extends State<HomeScreen> {
     final title = product.brand.isNotEmpty
         ? '${product.brand} — ${product.name}'
         : product.name;
-    final subtitleParts = <String>[
-      if (product.barcodeId.isNotEmpty) 'Barcode ${product.barcodeId}',
-      if (product.prodDate != null)
-        'Prod ${dateFmt.format(product.prodDate!)}',
-      if (product.batch.isNotEmpty) 'Batch ${product.batch}',
-      'Qty ${product.quantity}',
-    ];
-    final addedParts = <String>[
-      'Added ${dateFmt.format(product.addedDate)}',
-      if (product.createdBy.isNotEmpty) 'by ${product.createdBy}',
-    ];
+    final daysLabel = product.isExpired
+        ? '${-product.daysLeft}d ago'
+        : product.daysLeft == 0
+            ? 'Today'
+            : '${product.daysLeft}d left';
+    final metaStyle = TextStyle(
+      color: Colors.grey.shade800,
+      fontSize: 13,
+      height: 1.35,
+    );
+    final labelStyle = TextStyle(
+      color: Colors.grey.shade600,
+      fontSize: 13,
+      height: 1.35,
+    );
+
+    Widget metaRow(String label, String value) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 56,
+              child: Text(label, style: labelStyle),
+            ),
+            Expanded(
+              child: Text(
+                value,
+                style: metaStyle,
+                softWrap: true,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Dismissible(
       key: ValueKey(product.id),
       direction: DismissDirection.endToStart,
@@ -493,45 +520,87 @@ class _HomeScreenState extends State<HomeScreen> {
       onDismissed: (_) =>
           _delete(product, _pendingDeleteNotes.remove(product.id!) ?? ''),
       child: Card(
-        child: ListTile(
+        child: InkWell(
           onTap: () => _openForm(product: product),
-          leading: CircleAvatar(
-            backgroundColor: color.withValues(alpha: 0.15),
-            child: Icon(
-              product.isExpired
-                  ? Icons.error_outline
-                  : (product.isExpiringSoon || product.isExpiring90)
-                      ? Icons.schedule
-                      : Icons.check_circle_outline,
-              color: color,
-            ),
-          ),
-          title: Text(title,
-              style: const TextStyle(fontWeight: FontWeight.w600)),
-          subtitle: Text(
-            '${subtitleParts.join(' • ')}\n'
-            'Expires ${dateFmt.format(product.expiryDate)} • '
-            '${addedParts.join(' ')}',
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-          ),
-          isThreeLine: true,
-          trailing: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Text(
-              product.isExpired
-                  ? '${-product.daysLeft}d ago'
-                  : product.daysLeft == 0
-                      ? 'Today'
-                      : '${product.daysLeft}d left',
-              style: TextStyle(
-                  color: color.shade800,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12),
+          borderRadius: BorderRadius.circular(12),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 72,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: color.withValues(alpha: 0.15),
+                        child: Icon(
+                          product.isExpired
+                              ? Icons.error_outline
+                              : (product.isExpiringSoon ||
+                                      product.isExpiring90)
+                                  ? Icons.schedule
+                                  : Icons.check_circle_outline,
+                          color: color,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          daysLabel,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: color.shade800,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 15,
+                          height: 1.25,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      metaRow('Qty', '${product.quantity}'),
+                      metaRow(
+                        'Batch',
+                        product.batch.isEmpty ? '—' : product.batch,
+                      ),
+                      metaRow(
+                        'Expiry',
+                        dateFmt.format(product.expiryDate),
+                      ),
+                      if (product.barcodeId.isNotEmpty)
+                        metaRow('Barcode', product.barcodeId),
+                      if (product.prodDate != null)
+                        metaRow(
+                          'Prod',
+                          dateFmt.format(product.prodDate!),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),

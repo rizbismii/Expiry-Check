@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
 import '../services/database_service.dart';
+import '../services/user_service.dart';
 
 /// Admin-only staff account management (up to 10 users). Passwords are
 /// visible here so the admin can hand them out.
@@ -19,7 +20,17 @@ class _UsersScreenState extends State<UsersScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _ensureAdminThenLoad();
+  }
+
+  Future<void> _ensureAdminThenLoad() async {
+    final isAdmin = await UserService.instance.isAdmin;
+    if (!mounted) return;
+    if (!isAdmin) {
+      Navigator.of(context).pop();
+      return;
+    }
+    await _load();
   }
 
   Future<void> _load() async {
