@@ -31,14 +31,18 @@ jobs:
       - run: flutter test
 
       - name: Decode upload keystore (optional Play signing)
-        if: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 != '' }}
         env:
           PLAY_UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
           PLAY_KEY_PROPERTIES: ${{ secrets.PLAY_KEY_PROPERTIES }}
         run: |
+          if [ -z "${PLAY_UPLOAD_KEYSTORE_BASE64:-}" ]; then
+            echo "No PLAY_UPLOAD_KEYSTORE_BASE64 secret — building with debug signing."
+            exit 0
+          fi
           mkdir -p android/keystore
           echo "$PLAY_UPLOAD_KEYSTORE_BASE64" | base64 -d > android/keystore/upload-keystore.jks
           printf '%s\n' "$PLAY_KEY_PROPERTIES" > android/key.properties
+          echo "Upload keystore restored for Play-signed builds."
 
       - run: flutter build apk --release
 
