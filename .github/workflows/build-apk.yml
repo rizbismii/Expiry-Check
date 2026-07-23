@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK / AAB
 
 # Auto-build on cursor/* test branches; manual via Actions → Run workflow anytime.
 on:
@@ -30,6 +30,16 @@ jobs:
 
       - run: flutter test
 
+      - name: Decode upload keystore (optional Play signing)
+        if: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 != '' }}
+        env:
+          PLAY_UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
+          PLAY_KEY_PROPERTIES: ${{ secrets.PLAY_KEY_PROPERTIES }}
+        run: |
+          mkdir -p android/keystore
+          echo "$PLAY_UPLOAD_KEYSTORE_BASE64" | base64 -d > android/keystore/upload-keystore.jks
+          printf '%s\n' "$PLAY_KEY_PROPERTIES" > android/key.properties
+
       - run: flutter build apk --release
 
       - name: Upload APK
@@ -37,4 +47,14 @@ jobs:
         with:
           name: expiry-check-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      - name: Build Play App Bundle
+        run: flutter build appbundle --release
+
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: expiry-check-aab
+          path: build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
