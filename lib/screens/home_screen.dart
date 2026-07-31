@@ -298,7 +298,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       : RefreshIndicator(
                           onRefresh: _load,
                           child: ListView.builder(
-                            padding: const EdgeInsets.only(bottom: 96),
+                            padding: EdgeInsets.only(bottom: kIsWeb ? 160 : 96),
                             itemCount: _visible.length,
                             itemBuilder: (context, i) =>
                                 _buildProductCard(_visible[i]),
@@ -307,40 +307,45 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ],
             ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (kIsWeb)
-            FloatingActionButton.extended(
-              heroTag: 'manual',
-              tooltip: 'Add manually',
-              onPressed: () => _openForm(),
-              icon: const Icon(Icons.edit),
-              label: const Text('Add product'),
-            )
-          else ...[
-            FloatingActionButton.small(
-              heroTag: 'manual',
-              tooltip: 'Add manually',
-              onPressed: () => _openForm(),
-              child: const Icon(Icons.edit),
-            ),
-            const SizedBox(height: 12),
-            FloatingActionButton.extended(
-              heroTag: 'scan',
-              onPressed: _scanning ? null : _scanWithCamera,
-              icon: _scanning
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.camera_alt),
-              label: Text(_scanning ? 'Scanning…' : 'Scan product'),
-            ),
+      // On web, lift the FAB above the host bottom bar / safe area.
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+      floatingActionButton: Padding(
+        padding: EdgeInsets.only(bottom: kIsWeb ? 72 : 0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            if (kIsWeb)
+              FloatingActionButton.extended(
+                heroTag: 'manual',
+                tooltip: 'Add manually',
+                onPressed: () => _openForm(),
+                icon: const Icon(Icons.edit),
+                label: const Text('Add product'),
+              )
+            else ...[
+              FloatingActionButton.small(
+                heroTag: 'manual',
+                tooltip: 'Add manually',
+                onPressed: () => _openForm(),
+                child: const Icon(Icons.edit),
+              ),
+              const SizedBox(height: 12),
+              FloatingActionButton.extended(
+                heroTag: 'scan',
+                onPressed: _scanning ? null : _scanWithCamera,
+                icon: _scanning
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.camera_alt),
+                label: Text(_scanning ? 'Scanning…' : 'Scan product'),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

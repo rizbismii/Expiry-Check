@@ -2,7 +2,7 @@
 
 **Open in any browser:**
 
-## https://expiry-check.tiiny.site/
+## https://expirycheck-b861e0.tiiny.site/
 
 Same cloud inventory as the Android app. Manual entry on web. Camera scan stays on Android.
 
