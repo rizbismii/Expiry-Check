@@ -149,8 +149,17 @@ class SyncService {
     }
 
     _connected = true;
-    await pushAll();
-    await pullAll();
+    // Fresh browsers start with an empty local DB (plus default store names).
+    // Pull cloud data first so we never overwrite shop inventory/store names
+    // with empty local defaults. Phones with local stock still push first.
+    final localCount = (await DatabaseService.instance.getAll()).length;
+    if (localCount == 0) {
+      await pullAll();
+      await pushAll();
+    } else {
+      await pushAll();
+      await pullAll();
+    }
     await startRealtime();
     _emit('Live sync on');
   }

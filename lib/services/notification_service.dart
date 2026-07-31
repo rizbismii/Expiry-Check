@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,6 +30,11 @@ class NotificationService {
 
   Future<void> init() async {
     if (_initialized) return;
+    if (kIsWeb) {
+      // Browser build uses cloud sync only — no local notification plugin.
+      _initialized = true;
+      return;
+    }
     tz_data.initializeTimeZones();
     try {
       final name = await FlutterTimezone.getLocalTimezone();
@@ -51,6 +57,7 @@ class NotificationService {
   }
 
   Future<bool> requestPermissions() async {
+    if (kIsWeb) return false;
     await init();
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
@@ -142,6 +149,7 @@ class NotificationService {
 
   /// Rebuilds the entire schedule from the current product list and settings.
   Future<void> rescheduleAll() async {
+    if (kIsWeb) return;
     await init();
     await _plugin.cancelAll();
 

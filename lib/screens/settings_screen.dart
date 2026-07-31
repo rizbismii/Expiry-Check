@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -196,11 +196,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _restore() => _run(() async {
         final picked = await FilePicker.pickFiles(
           type: FileType.any,
-          withData: false,
+          withData: true,
         );
-        final path = picked?.files.single.path;
-        if (path == null) return;
-        final content = await File(path).readAsString();
+        final file = picked?.files.single;
+        final bytes = file?.bytes;
+        if (bytes == null) return;
+        final content = utf8.decode(bytes);
         final backup = ExportService.instance.parseBackup(content);
 
         if (!mounted) return;
