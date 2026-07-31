@@ -1,12 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'platform/sqlite_init.dart';
 import 'screens/home_screen.dart';
 import 'services/notification_service.dart';
 import 'services/sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await NotificationService.instance.init();
+  await initSqliteForPlatform();
+  // Local notifications are Android/iOS only.
+  if (!kIsWeb) {
+    await NotificationService.instance.init();
+  }
   await SyncService.instance.initialize();
   runApp(const ExpiryCheckApp());
 }

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -412,18 +413,19 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
       appBar: AppBar(
         title: Text(_isEdit ? 'Edit product' : 'Add product'),
         actions: [
-          IconButton(
-            tooltip: 'Scan with camera',
-            icon: _rescanning
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white),
-                  )
-                : const Icon(Icons.camera_alt),
-            onPressed: _rescanning ? null : _rescan,
-          ),
+          if (!kIsWeb)
+            IconButton(
+              tooltip: 'Scan with camera',
+              icon: _rescanning
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.camera_alt),
+              onPressed: _rescanning ? null : _rescan,
+            ),
         ],
       ),
       body: Form(

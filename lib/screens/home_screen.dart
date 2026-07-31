@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,7 +58,9 @@ class _HomeScreenState extends State<HomeScreen> {
       }
       await _load();
     });
-    NotificationService.instance.requestPermissions();
+    if (!kIsWeb) {
+      NotificationService.instance.requestPermissions();
+    }
     _syncSub = SyncService.instance.statusStream.listen((msg) {
       if (msg.contains('Synced') ||
           msg.contains('Pulled') ||
@@ -308,25 +311,35 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          FloatingActionButton.small(
-            heroTag: 'manual',
-            tooltip: 'Add manually',
-            onPressed: () => _openForm(),
-            child: const Icon(Icons.edit),
-          ),
-          const SizedBox(height: 12),
-          FloatingActionButton.extended(
-            heroTag: 'scan',
-            onPressed: _scanning ? null : _scanWithCamera,
-            icon: _scanning
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.camera_alt),
-            label: Text(_scanning ? 'Scanning…' : 'Scan product'),
-          ),
+          if (kIsWeb)
+            FloatingActionButton.extended(
+              heroTag: 'manual',
+              tooltip: 'Add manually',
+              onPressed: () => _openForm(),
+              icon: const Icon(Icons.edit),
+              label: const Text('Add product'),
+            )
+          else ...[
+            FloatingActionButton.small(
+              heroTag: 'manual',
+              tooltip: 'Add manually',
+              onPressed: () => _openForm(),
+              child: const Icon(Icons.edit),
+            ),
+            const SizedBox(height: 12),
+            FloatingActionButton.extended(
+              heroTag: 'scan',
+              onPressed: _scanning ? null : _scanWithCamera,
+              icon: _scanning
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.camera_alt),
+              label: Text(_scanning ? 'Scanning…' : 'Scan product'),
+            ),
+          ],
         ],
       ),
     );
@@ -441,7 +454,9 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 12),
           Text(
             _products.isEmpty
-                ? 'No products in ${_currentStore?.name ?? 'this store'} yet.\nTap "Scan product" to add your first item.'
+                ? (kIsWeb
+                    ? 'No products in ${_currentStore?.name ?? 'this store'} yet.\nTap "Add product" to enter one manually.'
+                    : 'No products in ${_currentStore?.name ?? 'this store'} yet.\nTap "Scan product" to add your first item.')
                 : 'Nothing matches this filter.',
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.grey.shade600),
