@@ -90,6 +90,39 @@ class _HomeScreenState extends State<HomeScreen> {
     _username = await UserService.instance.username ?? '';
   }
 
+  /// Web header: sign out and open the login screen so another user can enter.
+  Future<void> _switchUser() async {
+    await UserService.instance.signOut();
+    if (!mounted) return;
+    setState(() => _username = '');
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    if (!mounted) return;
+    _username = await UserService.instance.username ?? '';
+    if (_username.isEmpty) {
+      // Login dismissed — require a session before using the app.
+      await _ensureSignedIn();
+    }
+    if (!mounted) return;
+    setState(() {});
+    await _load();
+  }
+
+  Future<void> _logout() async {
+    await UserService.instance.signOut();
+    if (!mounted) return;
+    setState(() => _username = '');
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+    if (!mounted) return;
+    await _ensureSignedIn();
+    if (!mounted) return;
+    setState(() {});
+    await _load();
+  }
+
   Future<void> _load() async {
     final stores = await DatabaseService.instance.getStores();
     final prefs = await SharedPreferences.getInstance();
@@ -269,6 +302,51 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: _buildStoreSelector(),
         actions: [
+          if (kIsWeb && _username.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Center(
+                child: Text(
+                  _username,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+            ),
+            PopupMenuButton<String>(
+              tooltip: 'Account',
+              icon: const Icon(Icons.account_circle),
+              onSelected: (value) {
+                if (value == 'switch') {
+                  _switchUser();
+                } else if (value == 'logout') {
+                  _logout();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'switch',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.swap_horiz),
+                    title: Text('Switch user'),
+                    dense: true,
+                  ),
+                ),
+                PopupMenuItem(
+                  value: 'logout',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.logout),
+                    title: Text('Log out'),
+                    dense: true,
+                  ),
+                ),
+              ],
+            ),
+          ],
           IconButton(
             tooltip: 'Excel report',
             icon: const Icon(Icons.table_view),
