@@ -637,16 +637,53 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
               ],
             ),
             const SizedBox(height: 12),
-            TextFormField(
-              controller: _notesCtrl,
-              focusNode: _focusNodes['notes'],
-              decoration: InputDecoration(
-                labelText: 'Notes',
-                prefixIcon: const Icon(Icons.notes),
-                suffixIcon: _micButton('notes', _notesCtrl),
+            if (kIsWeb)
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _notesCtrl,
+                      focusNode: _focusNodes['notes'],
+                      decoration: InputDecoration(
+                        labelText: 'Notes',
+                        prefixIcon: const Icon(Icons.notes),
+                        suffixIcon: _micButton('notes', _notesCtrl),
+                      ),
+                      maxLines: 3,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: const Icon(Icons.save),
+                      label: Text(_saving
+                          ? 'Saving…'
+                          : _isEdit
+                              ? 'Update'
+                              : 'Save'),
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 14),
+                        minimumSize: const Size(0, 56),
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            else
+              TextFormField(
+                controller: _notesCtrl,
+                focusNode: _focusNodes['notes'],
+                decoration: InputDecoration(
+                  labelText: 'Notes',
+                  prefixIcon: const Icon(Icons.notes),
+                  suffixIcon: _micButton('notes', _notesCtrl),
+                ),
+                maxLines: 3,
               ),
-              maxLines: 3,
-            ),
             if (_scannedText != null && _scannedText!.isNotEmpty) ...[
               const SizedBox(height: 16),
               ExpansionTile(
@@ -673,18 +710,20 @@ class _ProductFormScreenState extends State<ProductFormScreen> {
                 style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
               ),
             ],
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _saving ? null : _save,
-              icon: const Icon(Icons.save),
-              label: Text(_saving
-                  ? 'Saving…'
-                  : _isEdit
-                      ? 'Update product'
-                      : 'Save product'),
-              style: FilledButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 14)),
-            ),
+            if (!kIsWeb) ...[
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: _saving ? null : _save,
+                icon: const Icon(Icons.save),
+                label: Text(_saving
+                    ? 'Saving…'
+                    : _isEdit
+                        ? 'Update product'
+                        : 'Save product'),
+                style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14)),
+              ),
+            ],
           ],
         ),
       ),
