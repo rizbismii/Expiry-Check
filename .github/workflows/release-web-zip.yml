@@ -1,0 +1,39 @@
+name: Release web zip for GitHub Pages
+
+# Builds a zip you can upload to expirycheck.github.io (no rizbismii in URL).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "lib/**"
+      - "web/**"
+      - "pubspec.yaml"
+      - "docs/**"
+
+jobs:
+  zip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.6"
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter build web --release --base-href "/"
+
+      - name: Pack zip
+        run: |
+          cd build/web
+          zip -qr "$GITHUB_WORKSPACE/ExpiryCheck-web.zip" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExpiryCheck-web
+          path: ExpiryCheck-web.zip
+          retention-days: 30

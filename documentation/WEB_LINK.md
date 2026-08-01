@@ -1,11 +1,10 @@
-# Expiry Check — web link
+# Expiry Check — free web link
 
-**Open in any browser:**
+Use a link **without** `rizbismii` in it:
 
-## https://expirycheck-app.tiiny.site/
+## https://expirycheck.github.io/
 
-Same cloud inventory as the Android app. Manual entry on web. Camera scan stays on Android.
+Setup steps (free GitHub Organization, no Tiiny):  
+see [FREE_WEB_LINK.md](FREE_WEB_LINK.md)
 
-Sign in with admin or staff username/password.
-
-On web, the top bar shows your username with Switch user and Log out.
+Same cloud inventory as Android. Manual entry on web.
